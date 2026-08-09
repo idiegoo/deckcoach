@@ -2,6 +2,7 @@ import re
 from typing import List, Dict, Any, Optional
 from .models import Card, Deck
 from .scryfall import ScryfallClient
+from .edhrec import get_tag_counts, edhrec_tags_to_weights
 
 client = ScryfallClient()
 
@@ -1074,14 +1075,15 @@ def detect_archetype(deck: Deck, stats: CategoryStats) -> tuple[str, Dict[str, L
     all_oracle = " ".join((c.oracle_text or "").lower() for c in deck.cards)
     all_names = " ".join(c.name.lower() for c in deck.cards)
 
-    scores: Dict[str, float] = {}
+    # ── Deck keyword scores (existing system) ──
+    kw_scores: Dict[str, float] = {}
     total_cards = max(sum(
         getattr(stats, t, 0) for t in ['land','creature','artifact','enchantment','instant','sorcery','planeswalker']
     ), 1)
 
     for arch, sig in ARCHETYPE_SIGNATURES.items():
         if arch == "General / Midrange":
-            continue  # skip in scoring; used as fallback
+            continue
 
         score = 0.0
         cmdr_kw_hits = 0
@@ -1100,7 +1102,27 @@ def detect_archetype(deck: Deck, stats: CategoryStats) -> tuple[str, Dict[str, L
             score += min(ratio * 100 * multiplier, 8.0)
 
         if score > 0:
-            scores[arch] = score
+            kw_scores[arch] = score
+
+    # Normalize keyword scores to [0, 1] — use sigmoid-like: score / (score + 10)
+    # This prevents 1-hit wonders from dominating; real archetypes need multiple keyword matches
+    kw_norm = {k: v / (v + 10.0) for k, v in kw_scores.items()}
+
+    # ── EDHREC community weights ──
+    edhrec_weights: Dict[str, float] = {}
+    try:
+        edhrec_raw = get_tag_counts(deck.commander.name)
+        edhrec_weights = edhrec_tags_to_weights(edhrec_raw)
+    except Exception:
+        pass  # fallback: EDHREC weights stay empty
+
+    # ── Hybrid blending: 35% EDHREC community + 65% user's deck ──
+    all_tags = set(kw_norm.keys()) | set(edhrec_weights.keys())
+    scores: Dict[str, float] = {}
+    for tag in all_tags:
+        kw = kw_norm.get(tag, 0.0)
+        ed = edhrec_weights.get(tag, 0.0) * 5  # scale EDHREC to match keyword score range
+        scores[tag] = 0.35 * ed + 0.65 * kw
 
     if not scores:
         default = ARCHETYPE_THRESHOLDS["General / Midrange"]

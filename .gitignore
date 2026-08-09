@@ -19,6 +19,10 @@ frontend/node_modules/.vite/
 
 # Cache / temp data
 backend/data/scryfall_cache.json
+backend/data/edhrec/
+
+# Test/exploration files
+response-*.json
 
 # IDE
 .vscode/
