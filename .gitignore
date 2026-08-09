@@ -1,0 +1,32 @@
+# Dependencies
+frontend/node_modules/
+
+# Build output
+frontend/dist/
+
+# Python
+backend/__pycache__/
+backend/app/__pycache__/
+*.py[cod]
+*$py.class
+backend/venv/
+
+# Environment
+.env
+
+# Vite cache
+frontend/node_modules/.vite/
+
+# Cache / temp data
+backend/data/scryfall_cache.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
