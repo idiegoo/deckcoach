@@ -89,6 +89,14 @@ class ScryfallClient:
         for n in names:
             key = self._normalize_name(n)
             if key in self.cache:
+                cached = self.cache[key]
+                # Skip art_series cached entries — they have no game data
+                if cached and isinstance(cached, dict):
+                    layout = cached.get("layout", "")
+                    ci = cached.get("color_identity") or []
+                    if not ci and layout in ("art_series", "art", "token"):
+                        to_fetch.append(key)
+                        continue
                 results[key] = self.cache[key]
             else:
                 to_fetch.append(key)

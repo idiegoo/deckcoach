@@ -59,6 +59,12 @@ Creá cuenta gratis en https://uptimerobot.com → New Monitor:
 
 Listo. Tu app corre 24/7 sin costo.
 
+**Tips de velocidad en Render:**
+- La DB se precarga al iniciar (`on_event("startup")`), no espera al primer request
+- El Build Command descarga la DB durante el deploy, no en cada cold start
+- Plan Starter ($7/mes) elimina cold starts por completo
+- Para más workers: `gunicorn -w 2 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:$PORT`
+
 ---
 
 ## Opción rápida: Cloudflare Tunnel

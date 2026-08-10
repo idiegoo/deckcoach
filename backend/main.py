@@ -16,6 +16,16 @@ from app.edhrec import get_high_synergy_for_commander, get_new_for_commander
 
 app = FastAPI(title="DeckCoach API", version="1.0.0")
 
+# Pre-load local card database on startup (avoids cold-start delay on first request)
+@app.on_event("startup")
+def startup_db():
+    try:
+        from app.card_db import get_card_db
+        db = get_card_db()
+        db._ensure_loaded()
+    except Exception:
+        pass  # non-critical, will load on first request
+
 is_dev = os.getenv("DECKCOACH_ENV", "dev") == "dev"
 cors_origins = [
     "http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173",
@@ -34,7 +44,13 @@ app.add_middleware(
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    try:
+        from app.card_db import get_card_db
+        db = get_card_db()
+        db._ensure_loaded()
+        return {"status": "ok", "db": "loaded"}
+    except Exception:
+        return {"status": "ok", "db": "pending"}
 
 @app.post("/api/analyze")
 def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
@@ -65,32 +81,47 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         stats = analyze_deck(deck_obj)
         stats["opening_hand_simulation"] = simulate_opening_hands(deck_obj, iterations=1000)
 
+        # External features — each with a timeout guard for Render's 30s limit
+        def _with_timeout(fn, *args, timeout=15):
+            import concurrent.futures
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    return ex.submit(fn, *args).result(timeout=timeout)
+            except Exception as e:
+                print(f"[timeout] {fn.__name__}: {e}")
+                return None
+
         try:
-            stats["suggestions"] = find_missing_staples(deck_obj, cmdr_name)
+            result = _with_timeout(find_missing_staples, deck_obj, cmdr_name)
+            stats["suggestions"] = result if result is not None else {}
         except Exception as e:
             stats["suggestions"] = {}
             print(f"[suggestions] Error: {e}")
 
         try:
-            stats["deck_comparison"] = compare_to_average(deck_obj, cmdr_name, budget=req.budget)
+            result = _with_timeout(compare_to_average, deck_obj, cmdr_name, req.budget or None)
+            stats["deck_comparison"] = result if result is not None else {}
         except Exception as e:
             stats["deck_comparison"] = {}
             print(f"[deck_comparison] Error: {e}")
 
         try:
-            stats["combos"] = detect_combos(deck_obj, cmdr_name)
+            result = _with_timeout(detect_combos, deck_obj, cmdr_name, timeout=20)
+            stats["combos"] = result if result is not None else []
         except Exception as e:
             stats["combos"] = []
             print(f"[combos] Error: {e}")
 
         try:
-            stats["high_synergy"] = get_high_synergy_for_commander(cmdr_name)
+            result = _with_timeout(get_high_synergy_for_commander, cmdr_name, timeout=10)
+            stats["high_synergy"] = result if result is not None else []
         except Exception as e:
             stats["high_synergy"] = []
             print(f"[high_synergy] Error: {e}")
 
         try:
-            stats["new_cards"] = get_new_for_commander(cmdr_name)
+            result = _with_timeout(get_new_for_commander, cmdr_name, timeout=10)
+            stats["new_cards"] = result if result is not None else []
         except Exception as e:
             stats["new_cards"] = []
             print(f"[new_cards] Error: {e}")

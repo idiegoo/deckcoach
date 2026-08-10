@@ -1467,8 +1467,10 @@ def _csb_cache_path(commander_name: str) -> str:
     return os.path.join(COMBOS_CACHE_DIR, f"csb_{slug}.json")
 
 
-def _fetch_csb_combos(commander_name: str) -> list:
-    """Scrape Commander Spellbook search page for combos involving a commander."""
+def _fetch_csb_combos(commander_name: str, fallback_cards: List[str] = None) -> list:
+    """Scrape Commander Spellbook for combos.
+    Tries commander name first, then short name, then individual cards as fallback.
+    """
     cache_path = _csb_cache_path(commander_name)
     if os.path.exists(cache_path):
         age = time.time() - os.path.getmtime(cache_path)
@@ -1480,6 +1482,7 @@ def _fetch_csb_combos(commander_name: str) -> list:
                 pass
 
     try:
+        # Try full name first
         resp = _req.get(
             "https://commanderspellbook.com/search/",
             params={"q": commander_name},
@@ -1496,6 +1499,57 @@ def _fetch_csb_combos(commander_name: str) -> list:
 
         data = json.loads(match.group(1))
         combos = data.get("props", {}).get("pageProps", {}).get("combos", [])
+
+        # If no results, try short name (before comma — "Y'shtola" instead of "Y'shtola, Night's Blessed")
+        if not combos and "," in commander_name:
+            short_name = commander_name.split(",")[0].strip()
+            resp2 = _req.get(
+                "https://commanderspellbook.com/search/",
+                params={"q": short_name},
+                timeout=15,
+                headers={"User-Agent": "DeckCoach/1.0"},
+            )
+            if resp2.status_code == 200:
+                match2 = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', resp2.text)
+                if match2:
+                    data2 = json.loads(match2.group(1))
+                    all_combos = data2.get("props", {}).get("pageProps", {}).get("combos", [])
+                    # Filter: only keep combos involving our specific commander
+                    cmdr_lower = commander_name.split(" // ")[0].strip().lower()
+                    combos = [
+                        c for c in (all_combos or [])
+                        if any(u.get("card", {}).get("name", "").split(" // ")[0].strip().lower() == cmdr_lower
+                               for u in c.get("uses", []))
+                    ]
+
+        # If still no results, search CSB by individual combo cards as fallback
+        if not combos and fallback_cards:
+            all_csb = []
+            seen_ids = set()
+            for card in (fallback_cards or [])[:5]:  # limit to 5 cards for speed
+                try:
+                    resp3 = _req.get(
+                        "https://commanderspellbook.com/search/",
+                        params={"q": card},
+                        timeout=8,
+                        headers={"User-Agent": "DeckCoach/1.0"},
+                    )
+                    if resp3.status_code == 200:
+                        match3 = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', resp3.text)
+                        if match3:
+                            data3 = json.loads(match3.group(1))
+                            card_combos = data3.get("props", {}).get("pageProps", {}).get("combos", [])
+                            for c in (card_combos or []):
+                                cid = c.get("id", "")
+                                if cid not in seen_ids:
+                                    seen_ids.add(cid)
+                                    all_csb.append(c)
+                        time.sleep(0.3)  # be polite to CSB
+                except Exception:
+                    pass
+            if all_csb:
+                combos = all_csb
+
     except Exception as e:
         print(f"[CSB] Error fetching combos for {commander_name}: {e}")
         return []
@@ -1657,18 +1711,21 @@ def detect_combos(deck: Deck, commander_name: str) -> List[dict]:
         })
 
     # ── Merge Commander Spellbook descriptions ──
+    # Collect unique card names from combos as fallback for CSB search
+    fallback_names = list({c for combo in combos for c in combo["cards_in_deck"] + combo["missing_pieces"]})
     try:
-        csb_combos = _fetch_csb_combos(commander_name)
+        csb_combos = _fetch_csb_combos(commander_name, fallback_cards=fallback_names)
     except Exception:
         csb_combos = []
 
     for combo in combos:
-        # Try to find matching CSB combo by comparing card names
-        # CSB uses are a subset of our combo's cards (all cards involved)
-        combo_set = set(c.lower() for c in combo["cards_in_deck"] + combo["missing_pieces"])
+        # Normalize card names: DFC "Kefka // Ruler" → "kefka"
+        def _norm(name: str) -> str:
+            return name.split(" // ")[0].strip().lower()
+
+        combo_set = set(_norm(c) for c in combo["cards_in_deck"] + combo["missing_pieces"])
         for csb in csb_combos:
-            csb_set = set(c.lower() for c in csb.get("uses", []))
-            # Exact match: all CSB uses are in our combo and vice versa
+            csb_set = set(_norm(c) for c in csb.get("uses", []))
             if csb_set == combo_set:
                 combo["description"] = csb.get("description", combo["description"])
                 combo["produces"] = csb.get("produces", [])
