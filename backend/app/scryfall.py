@@ -20,6 +20,9 @@ class ScryfallClient:
         self._load_cache()
         self._db = None
         self._db_init_lock = threading.Lock()
+        if len(self.cache) > 50000:
+            # Avoid massive caches from previous runs eating RAM
+            self.cache = {}
 
     def _get_local_db(self):
         if self._db is not None:

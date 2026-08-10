@@ -1,30 +1,57 @@
 # 🚀 Deploy — DeckCoach
 
-## Opción recomendada: Render (gratis, sin tarjeta)
+## Arquitectura recomendada: Vercel (frontend) + Render (backend)
 
-Render ofrece 512MB RAM, HTTPS, dominio `.onrender.com`. Totalmente gratis, no requiere tarjeta.
+Separar frontend y backend optimiza velocidad, evita OOM, y ambos son 100% gratis (sin tarjeta).
 
-**Contra**: el servicio se duerme tras 15 min sin tráfico. Se soluciona con [UptimeRobot](https://uptimerobot.com) (ping cada 14 min, también gratis).
-
-### 1. Buildear el frontend
-
-Render no soporta builds multi-stage. Hay que buildear local y commitear `dist/`:
-
-```bash
-cd frontend
-npm install
-npm run build
-cd ..
-
-# Commitear el build para que Render lo sirva
-git add frontend/dist/ -f
-git commit -m "Add frontend build for Render"
-git push
+```
+Usuario → Vercel (CDN global, estáticos) → api.ts → Render (Python/FastAPI)
 ```
 
-### 2. Crear Web Service en Render
+---
 
-1. Andá a https://dashboard.render.com → New → Web Service
+## 1. Frontend en Vercel (gratis, sin tarjeta)
+
+### 1.1 Preparar el código
+
+El frontend ya está listo. La única configuración necesaria ya está hecha:
+
+- `src/services/api.ts`: usa `VITE_API_URL` como baseURL (si no está definida, usa `/api` para dev local)
+- `vite.config.ts`: proxy a `localhost:8000` en desarrollo
+
+### 1.2 Deployar en Vercel
+
+1. Andá a https://vercel.com → **New Project**
+2. Importá tu repo de GitHub
+3. Vercel detecta Vite. Verificá que la configuración sea:
+   - **Framework Preset**: Vite
+   - **Root Directory**: `frontend`
+   - **Build Command**: `npm run build` (por defecto)
+   - **Output Directory**: `dist` (por defecto)
+4. **Variables de entorno** (Settings → Environment Variables):
+   ```
+   VITE_API_URL=https://tu-app.onrender.com
+   ```
+   Reemplazá `tu-app` por el nombre real de tu servicio en Render.
+5. Click **Deploy**. Vercel te da un dominio `https://tu-app.vercel.app`.
+
+> Si no sabés aún la URL de Render, deployá Vercel primero sin `VITE_API_URL`, luego agregala cuando tengas la URL de Render y redeployá.
+
+---
+
+## 2. Backend en Render (gratis, sin tarjeta)
+
+### 2.1 Preparar el código
+
+Ya está todo listo:
+- `DECKCOACH_ENV=production` activa CORS para `*.vercel.app` y `*.onrender.com`
+- La DB se precarga en startup (`on_event`)
+- Art series/tokens se filtran al buildear la DB
+- Timeout wrappers protegen contra cold starts lentos
+
+### 2.2 Deployar en Render
+
+1. Anda a https://dashboard.render.com → **New → Web Service**
 2. Conectá tu repo de GitHub
 3. Configurá:
 
@@ -34,85 +61,69 @@ git push
    | **Runtime** | Python 3 |
    | **Build Command** | `pip install -r requirements.txt` |
    | **Start Command** | `uvicorn main:app --host 0.0.0.0 --port $PORT` |
+   | **Instance Type** | Free |
 
-### 3. Variables de entorno
+4. **Variables de entorno** (Environment):
 
-En el dashboard de Render → Environment:
+   ```
+   DECKCOACH_ENV=production
+   DECKCOACH_DATA_DIR=/opt/render/project/src/data
+   PYTHON_VERSION=3.12.0
+   PORT=8000
+   ```
 
-```
-DECKCOACH_ENV=production
-DECKCOACH_DATA_DIR=/opt/render/project/src/data
-PYTHON_VERSION=3.12.0
-OPENAI_API_KEY=sk-...          (opcional)
-PORT=8000
-```
+5. Click **Create Web Service**. Render te da `https://tu-app.onrender.com`.
 
-### 4. Mantenerlo despierto
-
-Creá cuenta gratis en https://uptimerobot.com → New Monitor:
-
-| Campo | Valor |
-|---|---|
-| **Monitor Type** | HTTP(s) |
-| **URL** | `https://tu-app.onrender.com/api/health` |
-| **Monitoring Interval** | 14 minutes |
-
-Listo. Tu app corre 24/7 sin costo.
-
-**Tips de velocidad en Render:**
-- La DB se precarga al iniciar (`on_event("startup")`), no espera al primer request
-- El Build Command descarga la DB durante el deploy, no en cada cold start
-- Plan Starter ($7/mes) elimina cold starts por completo
-- Para más workers: `gunicorn -w 2 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:$PORT`
-
----
-
-## Opción rápida: Cloudflare Tunnel
-
-Ideal para compartir el link con amigos. Requiere que tu PC esté encendida.
+### 2.3 Verificar
 
 ```bash
-# Terminal 1: Backend
-cd backend && source venv/bin/activate && python main.py
-
-# Terminal 2: Frontend
-cd frontend && npm run dev
-
-# Terminal 3: Tunnel
-cloudflared tunnel --url http://localhost:5173
+curl https://tu-app.onrender.com/api/health
+# Debe devolver: {"status":"ok","db":"loaded"}
 ```
 
-Compartí la URL `https://xxx.trycloudflare.com`. Se muere al cerrar la terminal.
+### 2.4 Mantener vivo
+
+[UptimeRobot](https://uptimerobot.com) (gratis) → New Monitor:
+- **Monitor Type**: HTTP(s)
+- **URL**: `https://tu-app.onrender.com/api/health`
+- **Interval**: 14 minutes
 
 ---
 
-## Opción: Docker
+## 3. Variables de entorno
 
-```bash
-docker build -t deckcoach .
-docker run -d --name deckcoach -p 8000:8000 \
-  -e OPENAI_API_KEY=sk-... \
-  -v deckcoach_data:/app/data \
-  deckcoach
-```
-
----
-
-## Cómo funciona en producción
-
-1. FastAPI arranca en `:8000` con `DECKCOACH_ENV=production`
-2. Sirve el frontend compilado desde `frontend/dist/`
-3. Primera request: descarga oracle_cards de Scryfall (~23MB) → **SQLite** (`scryfall.db`, ~94MB)
-4. Requests siguientes: 99% consultas desde SQLite (~0 RAM, <1ms)
-5. Cachés persisten en `/app/data/`
+| Variable | Dónde | Default | Descripción |
+|---|---|---|---|
+| `VITE_API_URL` | Vercel | `/api` | URL del backend en Render |
+| `DECKCOACH_ENV` | Render | `dev` | `production` para activar CORS |
+| `DECKCOACH_DATA_DIR` | Render | `backend/data` | Directorio de datos |
+| `OPENAI_API_KEY` | Render | (vacío) | API key para reportes IA |
+| `PORT` | Render | `8000` | Puerto HTTP |
 
 ---
 
-## Variables de entorno
+## 4. Troubleshooting
 
-| Variable | Default | Descripción |
-|---|---|---|
-| `OPENAI_API_KEY` | (vacío) | API key para reportes IA |
-| `DECKCOACH_ENV` | `dev` | `dev` o `production` |
-| `DECKCOACH_DATA_DIR` | `backend/data` | Directorio de datos |
-| `PORT` | `8000` | Puerto HTTP |
+### 502 Bad Gateway en /api/analyze
+
+El backend tardó más de 30s (timeout de Render) o crasheó por OOM.
+
+1. Verificá el health: `curl https://tu-app.onrender.com/api/health`
+2. Si responde `{"status":"ok","db":"loaded"}`, la DB está lista. El primer request de análisis puede tardar ~15s. Reintentá.
+3. Si responde `{"status":"ok","db":"pending"}`, la DB no se cargó. Revisá los logs de Render (hay un botón "Logs" en el dashboard).
+4. Si no responde nada, la app crasheó. Revisá los logs.
+
+### OOM (Out of Memory)
+
+Si ves `Ran out of memory` en los logs de Render:
+
+1. Verificá que `PYTHON_VERSION=3.12.0` esté en las variables de entorno
+2. Borrá el disco de Render y redeployá (el volumen puede tener archivos corruptos o muy grandes)
+3. Si persiste, considerá el plan Starter ($7/mes, 1GB RAM)
+
+### CORS errors en el navegador
+
+Asegurate de que:
+1. `DECKCOACH_ENV=production` esté en Render
+2. `VITE_API_URL` en Vercel apunte a la URL correcta de Render
+3. La URL de Vercel esté en los CORS origins de `main.py` (ya está: `*.vercel.app`)

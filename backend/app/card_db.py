@@ -24,9 +24,10 @@ class CardDatabase:
     def _get_conn(self) -> sqlite3.Connection:
         if self._conn is None:
             os.makedirs(DB_DIR, exist_ok=True)
-            self._conn = sqlite3.connect(DB_FILE)
+            self._conn = sqlite3.connect(DB_FILE, check_same_thread=False)
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.execute("PRAGMA cache_size=-8000")  # 8MB cache
             self._conn.row_factory = sqlite3.Row
         return self._conn
 
@@ -107,7 +108,6 @@ class CardDatabase:
 
             decompressor = gzip.GzipFile(fileobj=resp.raw)
             count = 0
-            seen: Dict[str, dict] = {}  # name → best card data (skip art series if real exists)
             batch = []
             batch_size = 5000
 
@@ -122,28 +122,45 @@ class CardDatabase:
                         continue
 
                     layout = card.get("layout", "")
-                    ci = card.get("color_identity") or []
-                    is_art = layout in ("art_series", "art")
-
-                    # Skip art cards entirely — they have no color_identity/game data
-                    if is_art:
+                    # Skip non-playable cards
+                    if layout in ("art_series", "art", "token", "emblem", "double_faced_token"):
                         continue
 
-                    # Skip tokens, emblems, etc.
-                    if layout in ("token", "emblem", "double_faced_token"):
-                        continue
+                    data = json.dumps({
+                        "name": name,
+                        "cmc": card.get("cmc"),
+                        "colors": card.get("colors"),
+                        "color_identity": card.get("color_identity"),
+                        "type_line": card.get("type_line"),
+                        "oracle_text": card.get("oracle_text", ""),
+                        "mana_cost": card.get("mana_cost") or (
+                            (card.get("card_faces") or [{}])[0].get("mana_cost")
+                            if card.get("card_faces") else None
+                        ),
+                        "layout": layout,
+                        "image_uris": card.get("image_uris") if card.get("image_uris") else None,
+                        "card_faces": card.get("card_faces"),
+                    })
+                    faces = card.get("card_faces")
+                    if faces and len(faces) >= 2:
+                        back_uris = faces[1].get("image_uris")
+                        if back_uris:
+                            d = json.loads(data)
+                            d["image_uris_back"] = back_uris
+                            data = json.dumps(d)
 
-                    # Skip art series if we already have the real card
-                    existing = seen.get(name)
-                    if existing:
-                        existing_is_art = existing.get("layout") in ("art_series", "art")
-                        if is_art and not existing_is_art:
-                            continue
-                        if not is_art and existing_is_art:
-                            seen[name] = card
-                        continue
+                    batch.append((name, name.lower(), data))
+                    if " // " in name:
+                        front = name.split(" // ")[0]
+                        batch.append((front, front.lower(), data))
+                    count += 1
 
-                    seen[name] = card
+                    if len(batch) >= batch_size:
+                        conn.executemany(
+                            "INSERT OR REPLACE INTO cards (name, lower_name, data) VALUES (?, ?, ?)",
+                            batch
+                        )
+                        batch = []
                 except json.JSONDecodeError:
                     pass
 
