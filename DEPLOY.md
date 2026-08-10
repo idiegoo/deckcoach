@@ -1,62 +1,82 @@
 # 🚀 Deploy — DeckCoach
 
-## Opción gratuita: Cloudflare Tunnel
+## Opción recomendada: Render (gratis, sin tarjeta)
 
-La forma más rápida de compartir tu app. Requiere que tu PC esté encendida.
+Render ofrece 512MB RAM, HTTPS, dominio `.onrender.com`. Totalmente gratis, no requiere tarjeta.
+
+**Contra**: el servicio se duerme tras 15 min sin tráfico. Se soluciona con [UptimeRobot](https://uptimerobot.com) (ping cada 14 min, también gratis).
+
+### 1. Buildear el frontend
+
+Render no soporta builds multi-stage. Hay que buildear local y commitear `dist/`:
 
 ```bash
-# Terminal 1: Backend
-cd backend
-source venv/bin/activate
-python main.py
-
-# Terminal 2: Frontend
 cd frontend
-npm run dev
+npm install
+npm run build
+cd ..
 
-# Terminal 3: Tunnel (comparte esta URL)
-cloudflared tunnel --url http://localhost:5173
+# Commitear el build para que Render lo sirva
+git add frontend/dist/ -f
+git commit -m "Add frontend build for Render"
+git push
 ```
 
-Te da una URL tipo `https://xxx.trycloudflare.com`. La compartís y listo. Se muere al cerrar la terminal.
+### 2. Crear Web Service en Render
+
+1. Andá a https://dashboard.render.com → New → Web Service
+2. Conectá tu repo de GitHub
+3. Configurá:
+
+   | Campo | Valor |
+   |---|---|
+   | **Root Directory** | `backend` |
+   | **Runtime** | Python 3 |
+   | **Build Command** | `pip install -r requirements.txt` |
+   | **Start Command** | `uvicorn main:app --host 0.0.0.0 --port $PORT` |
+
+### 3. Variables de entorno
+
+En el dashboard de Render → Environment:
+
+```
+DECKCOACH_ENV=production
+DECKCOACH_DATA_DIR=/opt/render/project/src/data
+PYTHON_VERSION=3.12.0
+OPENAI_API_KEY=sk-...          (opcional)
+PORT=8000
+```
+
+### 4. Mantenerlo despierto
+
+Creá cuenta gratis en https://uptimerobot.com → New Monitor:
+
+| Campo | Valor |
+|---|---|
+| **Monitor Type** | HTTP(s) |
+| **URL** | `https://tu-app.onrender.com/api/health` |
+| **Monitoring Interval** | 14 minutes |
+
+Listo. Tu app corre 24/7 sin costo.
 
 ---
 
-## Opción persistente: Fly.io
+## Opción rápida: Cloudflare Tunnel
 
-Fly.io tiene un **free allowance** que cubre una app pequeña sin costo. Solo requiere tarjeta para verificación (no te cobran si no excedés los límites).
-
-### 1. Instalar Fly CLI
+Ideal para compartir el link con amigos. Requiere que tu PC esté encendida.
 
 ```bash
-curl -L https://fly.io/install.sh | sh
-fly auth signup
+# Terminal 1: Backend
+cd backend && source venv/bin/activate && python main.py
+
+# Terminal 2: Frontend
+cd frontend && npm run dev
+
+# Terminal 3: Tunnel
+cloudflared tunnel --url http://localhost:5173
 ```
 
-### 2. Crear volumen (1GB)
-
-```bash
-fly volumes create deckcoach_data --size 1
-```
-
-### 3. Setear secretos
-
-```bash
-fly secrets set OPENAI_API_KEY=sk-...
-```
-
-### 4. Deployar
-
-```bash
-fly launch
-fly deploy
-```
-
-### 5. Abrir
-
-```bash
-fly open
-```
+Compartí la URL `https://xxx.trycloudflare.com`. Se muere al cerrar la terminal.
 
 ---
 
@@ -77,16 +97,8 @@ docker run -d --name deckcoach -p 8000:8000 \
 1. FastAPI arranca en `:8000` con `DECKCOACH_ENV=production`
 2. Sirve el frontend compilado desde `frontend/dist/`
 3. Primera request: descarga oracle_cards de Scryfall (~23MB) → **SQLite** (`scryfall.db`, ~94MB)
-4. Requests siguientes: 99% de consultas resueltas desde SQLite (~0 RAM extra, <1ms)
-5. Cachés persisten en volumen
-
-### SQLite vs JSON (anterior)
-
-| | JSON | SQLite |
-|---|---|---|
-| Cold start | ~2-3s parseando 63MB | ~0.1s |
-| RAM extra | ~200MB | ~0MB |
-| Lookup | 0ms (dict) | <1ms (B-tree) |
+4. Requests siguientes: 99% consultas desde SQLite (~0 RAM, <1ms)
+5. Cachés persisten en `/app/data/`
 
 ---
 
@@ -98,27 +110,3 @@ docker run -d --name deckcoach -p 8000:8000 \
 | `DECKCOACH_ENV` | `dev` | `dev` o `production` |
 | `DECKCOACH_DATA_DIR` | `backend/data` | Directorio de datos |
 | `PORT` | `8000` | Puerto HTTP |
-
----
-
-## Troubleshooting
-
-### "No se encontró la carta X"
-
-DB desactualizada:
-
-```bash
-rm /app/data/scryfall.db
-# Reinicia — se reconstruye automáticamente
-```
-
-### Rate limiting de Scryfall
-
-La DB local elimina rate limits. Si ves 429, la DB no se cargó. Reinicia.
-
-### Volumen no persiste en Fly.io
-
-```bash
-fly volumes list
-fly volumes create deckcoach_data --size 1
-```

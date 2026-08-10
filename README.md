@@ -163,8 +163,6 @@ deckcoach/
 │       └── services/
 │           └── api.ts             # Axios API client
 ├── Dockerfile                     # Multi-stage: Node build → Python runtime
-├── fly.toml                       # Fly.io deployment config
-├── railway.json                   # Railway deployment config
 ├── PLAN.md                        # Feature implementation plan
 └── README.md                      # This file
 ```
@@ -175,18 +173,18 @@ deckcoach/
 
 Ver [DEPLOY.md](./DEPLOY.md) para instrucciones completas.
 
-| Plataforma | Costo | Ideal para |
-|---|---|---|
-| **Cloudflare Tunnel** | Gratis | Compartir con amigos (tu PC encendida) |
-| **Fly.io** | ~$0/mes con free allowance | 24/7 público, 512MB RAM |
-| **Docker** | Gratis (tu VPS) | VPS propio o local |
+| Plataforma | Costo | Tarjeta | Ideal para |
+|---|---|---|---|---|
+| **Render** | Gratis | No | 24/7 público, dominio gratis |
+| **Cloudflare Tunnel** | Gratis | No | Compartir link, PC encendida |
+| **Docker** | Gratis | No | VPS propio |
 
-Cloudflare Tunnel es la opción más simple si solo querés compartir el link con alguien:
+Cloudflare Tunnel es la opción más simple para desarrollo/demo:
 
 ```bash
-cd frontend && npm run dev    # Terminal 1
-cd backend && python main.py  # Terminal 2
-cloudflared tunnel --url http://localhost:5173  # Terminal 3
+cd backend && source venv/bin/activate && python main.py   # Terminal 1
+cd frontend && npm run dev                                  # Terminal 2
+cloudflared tunnel --url http://localhost:5173              # Terminal 3
 ```
 
 ---
