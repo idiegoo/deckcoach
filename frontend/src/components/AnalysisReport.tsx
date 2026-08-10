@@ -169,71 +169,79 @@ function DiagnosticPanel({ stats }: { stats: any }) {
         <span className="text-xs text-gray-500 font-normal">(umbrales combinados)</span>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {items.map((item) => (
-          <DiagnosticBadge
-            key={item.key}
-            label={item.label}
-            value={item.value}
-            good={item.good}
-            warn={item.warn}
-            bad={item.bad}
-            hasCards={item.cards.length > 0}
-            isSelected={selected === item.key}
-            onClick={() => setSelected(selected === item.key ? null : item.key)}
-          />
-        ))}
-      </div>
-
-      {/* Shared expandable area — right after the grid */}
+      {/* Diagnostic badges in rows of 3 (2 on mobile), expandable right below each row */}
       {(() => {
-        const activeItem = items.find((i) => i.key === selected)
-        return (
-          <div className={`overflow-hidden transition-all duration-300 ease-in-out ${
-            activeItem ? 'max-h-[3000px] opacity-100 mt-3' : 'max-h-0 opacity-0'
-          }`}>
-            {activeItem && (
-              <div className="glass rounded-xl p-4 border border-gray-700/50">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-sm font-semibold text-gray-200">
-                    {activeItem.label} — {activeItem.cards.length} cartas
-                  </h4>
-                  <button
-                    onClick={() => setSelected(null)}
-                    className="text-gray-500 hover:text-gray-300 transition-colors text-lg leading-none"
-                  >
-                    ✕
-                  </button>
-                </div>
-                <div className="flex flex-wrap gap-3">
-                  {activeItem.cards.map((card, i) => (
-                    <div key={i} className="flex flex-col items-center gap-1">
-                      {cardImages[card] ? (
-                        <FlipCardImage
-                          frontUrl={cardImages[card]}
-                          backUrl={cardImagesBack[card]}
-                          name={card}
-                          className="w-36 sm:w-44"
-                          onOpenModal={(current, back) => openModal(current, card, back)}
-                        />
-                      ) : (
-                        <div className="w-36 sm:w-44 aspect-[5/7] glass rounded-lg flex items-center justify-center">
-                          <span className="text-[10px] text-gray-500 text-center px-1">{card}</span>
-                        </div>
-                      )}
-                      <a
-                        href={`https://scryfall.com/search?q=!%22${encodeURIComponent(card)}%22`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[10px] text-gray-300 text-center leading-tight max-w-[144px] sm:max-w-[176px] hover:underline"
-                      >{card}</a>
-                    </div>
-                  ))}
-                </div>
+        const cols = 3 // desktop
+        const rows: typeof items[] = []
+        for (let i = 0; i < items.length; i += cols) {
+          rows.push(items.slice(i, i + cols))
+        }
+        return rows.map((row, rowIdx) => {
+          const selectedInRow = row.find(i => i.key === selected)
+          return (
+            <div key={rowIdx}>
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                {row.map((item) => (
+                  <DiagnosticBadge
+                    key={item.key}
+                    label={item.label}
+                    value={item.value}
+                    good={item.good}
+                    warn={item.warn}
+                    bad={item.bad}
+                    hasCards={item.cards.length > 0}
+                    isSelected={selected === item.key}
+                    onClick={() => setSelected(selected === item.key ? null : item.key)}
+                  />
+                ))}
               </div>
-            )}
-          </div>
-        )
+              <div className={`overflow-hidden transition-all duration-300 ease-in-out ${
+                selectedInRow ? 'max-h-[3000px] opacity-100 mt-3' : 'max-h-0 opacity-0'
+              }`}>
+                {selectedInRow && (
+                  <div className="glass rounded-xl p-4 border border-gray-700/50">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-sm font-semibold text-gray-200">
+                        {selectedInRow.label} — {selectedInRow.cards.length} cartas
+                      </h4>
+                      <button
+                        onClick={() => setSelected(null)}
+                        className="text-gray-500 hover:text-gray-300 transition-colors text-lg leading-none"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      {selectedInRow.cards.map((card, i) => (
+                        <div key={i} className="flex flex-col items-center gap-1">
+                          {cardImages[card] ? (
+                            <FlipCardImage
+                              frontUrl={cardImages[card]}
+                              backUrl={cardImagesBack[card]}
+                              name={card}
+                              className="w-36 sm:w-44"
+                              onOpenModal={(current, back) => openModal(current, card, back)}
+                            />
+                          ) : (
+                            <div className="w-36 sm:w-44 aspect-[5/7] glass rounded-lg flex items-center justify-center">
+                              <span className="text-[10px] text-gray-500 text-center px-1">{card}</span>
+                            </div>
+                          )}
+                          <a
+                            href={`https://scryfall.com/search?q=!%22${encodeURIComponent(card)}%22`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[10px] text-gray-300 text-center leading-tight max-w-[144px] sm:max-w-[176px] hover:underline"
+                          >{card}</a>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })
       })()}
 
       {/* Tierras + CMC recomendados (no expandibles) */}
@@ -261,7 +269,7 @@ function DiagnosticPanel({ stats }: { stats: any }) {
         <div className="grid grid-cols-2 gap-3">
           <div className={`rounded-xl p-4 border ${statusColors[landStatus]}`}>
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-gray-300 flex items-center gap-1">🌳 Tierras recomendadas</span>
+              <span className="text-sm font-medium text-gray-300 flex items-center gap-1">🌳 Lands</span>
               <span className="text-xs opacity-70">{statusIcons[landStatus]} {statusLabels[landStatus]}</span>
             </div>
             <p className="text-2xl font-bold text-green-400 mt-1">
@@ -273,7 +281,7 @@ function DiagnosticPanel({ stats }: { stats: any }) {
           </div>
           <div className={`rounded-xl p-4 border ${statusColors[cmcStatus]}`}>
             <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-gray-300 flex items-center gap-1">📊 CMC recomendado</span>
+              <span className="text-sm font-medium text-gray-300 flex items-center gap-1">📊 CMC</span>
               <span className="text-xs opacity-70">{statusIcons[cmcStatus]} {statusLabels[cmcStatus]}</span>
             </div>
             <p className="text-2xl font-bold text-pink-400 mt-1">
