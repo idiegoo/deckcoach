@@ -138,7 +138,7 @@ deckcoach/
 │   │   ├── simulator.py           # Monte Carlo hand simulation + mulligan evaluation
 │   │   └── ai_service.py          # OpenAI integration (gpt-4o-mini)
 │   └── data/
-│       ├── scryfall_db.json       # Local card DB (63MB, auto-downloaded)
+│       ├── scryfall.db          # Local card DB (SQLite, ~80MB, auto-downloaded)
 │       ├── scryfall_cache.json    # API response cache
 │       ├── edhrec/                # EDHREC per-commander cache
 │       └── combos/                # Combo data cache
@@ -171,6 +171,26 @@ deckcoach/
 
 ---
 
+## 🚀 Deploy
+
+Ver [DEPLOY.md](./DEPLOY.md) para instrucciones completas.
+
+| Plataforma | Costo | Ideal para |
+|---|---|---|
+| **Cloudflare Tunnel** | Gratis | Compartir con amigos (tu PC encendida) |
+| **Fly.io** | ~$0/mes con free allowance | 24/7 público, 512MB RAM |
+| **Docker** | Gratis (tu VPS) | VPS propio o local |
+
+Cloudflare Tunnel es la opción más simple si solo querés compartir el link con alguien:
+
+```bash
+cd frontend && npm run dev    # Terminal 1
+cd backend && python main.py  # Terminal 2
+cloudflared tunnel --url http://localhost:5173  # Terminal 3
+```
+
+---
+
 ## 🧠 IA y costos
 
 La IA está **desactivada por defecto**. Activá el toggle "Análisis con IA" para obtener reportes narrativos.
@@ -197,7 +217,7 @@ La simulación de manos corre en Python puro. El LLM traduce datos y arquetipos 
 
 ## ⚠️ Notas técnicas
 
-- **Base de datos local**: descarga `oracle_cards` de Scryfall (~23MB comprimido, 38k cartas) → `scryfall_db.json` (63MB). Se refresca cada 7 días. El 99% de las consultas se resuelven sin HTTP.
+- **Base de datos local**: descarga `oracle_cards` de Scryfall (~23MB comprimido, 38k cartas) → **SQLite** (`scryfall.db`, ~80MB). Se refresca cada 7 días. 0 RAM en queries, arranque instantáneo. El 99% de las consultas se resuelven sin HTTP.
 - **Rate limiting Scryfall**: la DB local elimina los rate limits. Si la API falla (429), aplica retry con backoff suave.
 - **Fuzzy search**: cartas con nombres alternativos (UB, silver-bordered, renames) se resuelven automáticamente.
 - **Double-faced cards**: indexadas tanto por nombre completo como solo cara frontal. Imágenes de ambas caras disponibles.

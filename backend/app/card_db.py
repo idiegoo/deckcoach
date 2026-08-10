@@ -1,53 +1,69 @@
 """
 Local Scryfall card database from bulk data.
-Downloads oracle_cards once and serves lookups with zero HTTP requests.
+Downloads oracle_cards once, stores in SQLite for zero-RAM lookups.
 Auto-refreshes every 7 days.
 """
 import json
 import os
 import time
 import gzip
-import shutil
+import sqlite3
 import requests
 from typing import Optional, Dict, List
 
 DB_DIR = os.environ.get("DECKCOACH_DATA_DIR", os.path.join(os.path.dirname(__file__), "..", "data"))
-DB_FILE = os.path.join(DB_DIR, "scryfall_db.json")
-META_FILE = os.path.join(DB_DIR, "scryfall_db_meta.json")
-REFRESH_SECONDS = 7 * 86400  # 7 days
+DB_FILE = os.path.join(DB_DIR, "scryfall.db")
+REFRESH_SECONDS = 7 * 86400
 
 
 class CardDatabase:
     def __init__(self):
-        self._cards: Dict[str, dict] = {}
+        self._conn: Optional[sqlite3.Connection] = None
         self._loaded = False
+
+    def _get_conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            os.makedirs(DB_DIR, exist_ok=True)
+            self._conn = sqlite3.connect(DB_FILE)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.row_factory = sqlite3.Row
+        return self._conn
 
     def _ensure_loaded(self):
         if self._loaded:
             return
-        if os.path.exists(DB_FILE):
-            self._load_from_disk()
-        else:
-            self._download_and_build()
 
-    def _load_from_disk(self):
-        print("[CardDB] Loading local database...")
-        try:
-            with open(DB_FILE, "r", encoding="utf-8") as f:
-                self._cards = json.load(f)
+        conn = self._get_conn()
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS cards (
+                name TEXT PRIMARY KEY,
+                lower_name TEXT NOT NULL,
+                data TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_lower_name ON cards(lower_name)")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+
+        row = conn.execute("SELECT value FROM meta WHERE key = 'count'").fetchone()
+        if row and int(row["value"]) > 0 and not self.should_refresh():
             self._loaded = True
-            print(f"[CardDB] Loaded {len(self._cards)} cards from disk")
-        except Exception as e:
-            print(f"[CardDB] Failed to load from disk: {e}")
-            self._download_and_build()
+            count = int(row["value"])
+            print(f"[CardDB] SQLite ready: {count} cards")
+            return
+
+        self._download_and_build()
 
     def _download_and_build(self):
         print("[CardDB] Downloading Scryfall bulk data (~23MB)...")
-
-        os.makedirs(DB_DIR, exist_ok=True)
+        conn = self._get_conn()
 
         try:
-            # Get bulk data info
             resp = requests.get(
                 "https://api.scryfall.com/bulk-data",
                 timeout=15,
@@ -56,7 +72,6 @@ class CardDatabase:
             resp.raise_for_status()
             bulk_list = resp.json()
 
-            # Find oracle_cards entry
             oracle_entry = None
             for entry in bulk_list.get("data", []):
                 if entry.get("type") == "oracle_cards":
@@ -74,8 +89,10 @@ class CardDatabase:
                 self._loaded = True
                 return
 
-            # Download the gzipped bulk file
-            print(f"[CardDB] Downloading from {download_url}")
+            updated_at = oracle_entry.get("updated_at", "")
+
+            # Download and parse
+            print(f"[CardDB] Downloading...")
             resp = requests.get(
                 download_url,
                 timeout=300,
@@ -84,12 +101,15 @@ class CardDatabase:
             )
             resp.raise_for_status()
 
-            # Decompress and parse JSON Lines
-            print("[CardDB] Parsing bulk data...")
-            cards = {}
-            # Scryfall bulk data is gzipped JSON Lines
+            print("[CardDB] Parsing bulk data into SQLite...")
+            conn.execute("DELETE FROM cards")
+            conn.execute("DELETE FROM meta")
+
             decompressor = gzip.GzipFile(fileobj=resp.raw)
             count = 0
+            batch = []
+            batch_size = 5000
+
             for line in decompressor:
                 line = line.strip()
                 if not line:
@@ -98,52 +118,60 @@ class CardDatabase:
                     card = json.loads(line)
                     name = card.get("name", "")
                     if name:
-                        data = {
+                        data = json.dumps({
                             "name": name,
                             "cmc": card.get("cmc"),
                             "colors": card.get("colors"),
                             "color_identity": card.get("color_identity"),
                             "type_line": card.get("type_line"),
                             "oracle_text": card.get("oracle_text", ""),
-                            "mana_cost": card.get("mana_cost") or ((card.get("card_faces") or [{}])[0].get("mana_cost") if card.get("card_faces") else None),
+                            "mana_cost": card.get("mana_cost") or (
+                                (card.get("card_faces") or [{}])[0].get("mana_cost")
+                                if card.get("card_faces") else None
+                            ),
                             "layout": card.get("layout"),
-                        }
-                        # Only store image_uris if present (single-faced cards)
-                        if card.get("image_uris"):
-                            data["image_uris"] = card["image_uris"]
-                        # Store card_faces for DFCs
+                            "image_uris": card.get("image_uris") or None,
+                            "card_faces": card.get("card_faces"),
+                        })
+                        # Store back face image for DFCs
                         faces = card.get("card_faces")
-                        if faces and isinstance(faces, list):
-                            data["card_faces"] = faces
-                            if len(faces) >= 2:
-                                face_data = faces[1].get("image_uris")
-                                if face_data:
-                                    data["image_uris_back"] = face_data
-                        cards[name] = data
-                        # For double-faced cards, also index by front face name
+                        if faces and len(faces) >= 2:
+                            back_uris = faces[1].get("image_uris")
+                            if back_uris:
+                                d = json.loads(data)
+                                d["image_uris_back"] = back_uris
+                                data = json.dumps(d)
+
+                        batch.append((name, name.lower(), data))
+
+                        # Also index front-face name for DFCs
                         if " // " in name:
                             front = name.split(" // ")[0]
-                            if front not in cards:
-                                cards[front] = data
+                            batch.append((front, front.lower(), data))
+
                         count += 1
+
+                        if len(batch) >= batch_size:
+                            conn.executemany(
+                                "INSERT OR REPLACE INTO cards (name, lower_name, data) VALUES (?, ?, ?)",
+                                batch
+                            )
+                            batch = []
                 except json.JSONDecodeError:
                     pass
 
-            print(f"[CardDB] Parsed {count} cards")
+            if batch:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO cards (name, lower_name, data) VALUES (?, ?, ?)",
+                    batch
+                )
+                batch = []
 
-            # Save to disk
-            with open(DB_FILE, "w", encoding="utf-8") as f:
-                json.dump(cards, f, ensure_ascii=False)
+            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('count', ?)", (str(count),))
+            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('updated_at', ?)", (updated_at,))
+            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('built_at', ?)", (str(time.time()),))
+            conn.commit()
 
-            # Save metadata
-            with open(META_FILE, "w", encoding="utf-8") as f:
-                json.dump({
-                    "updated_at": oracle_entry.get("updated_at"),
-                    "count": count,
-                    "built_at": time.time(),
-                }, f)
-
-            self._cards = cards
             self._loaded = True
             print(f"[CardDB] Database built: {count} cards")
 
@@ -152,42 +180,47 @@ class CardDatabase:
             self._loaded = True
 
     def get_card(self, name: str) -> Optional[dict]:
-        """Exact name lookup (case-sensitive)."""
         self._ensure_loaded()
-        return self._cards.get(name)
+        row = self._get_conn().execute(
+            "SELECT data FROM cards WHERE name = ?", (name,)
+        ).fetchone()
+        return json.loads(row["data"]) if row else None
 
     def get_cards(self, names: List[str]) -> Dict[str, Optional[dict]]:
-        """Batch lookup by exact name."""
         self._ensure_loaded()
-        results = {}
+        results: Dict[str, Optional[dict]] = {}
+        conn = self._get_conn()
+        # SQLite IN clause with parameterized query
+        placeholders = ",".join("?" for _ in names)
+        rows = conn.execute(
+            f"SELECT name, data FROM cards WHERE name IN ({placeholders})",
+            names
+        ).fetchall()
+        found = {r["name"]: json.loads(r["data"]) for r in rows}
         for name in names:
-            results[name] = self._cards.get(name)
+            results[name] = found.get(name)
         return results
 
     def fuzzy_get(self, name: str) -> Optional[dict]:
-        """Case-insensitive + normalize lookup."""
         self._ensure_loaded()
-        if name in self._cards:
-            return self._cards[name]
-        # Try lowercased match
-        lower = name.lower()
-        for n, data in self._cards.items():
-            if n.lower() == lower:
-                return data
+        row = self._get_conn().execute(
+            "SELECT data FROM cards WHERE lower_name = ?", (name.lower(),)
+        ).fetchone()
+        if row:
+            return json.loads(row["data"])
         return None
 
     def should_refresh(self) -> bool:
-        if not os.path.exists(META_FILE):
+        conn = self._get_conn()
+        row = conn.execute("SELECT value FROM meta WHERE key = 'built_at'").fetchone()
+        if not row:
             return True
         try:
-            with open(META_FILE, "r") as f:
-                meta = json.load(f)
-            return (time.time() - meta.get("built_at", 0)) > REFRESH_SECONDS
+            return (time.time() - float(row["value"])) > REFRESH_SECONDS
         except Exception:
             return True
 
 
-# Singleton
 _card_db: Optional[CardDatabase] = None
 
 

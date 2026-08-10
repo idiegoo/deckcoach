@@ -19,6 +19,7 @@ frontend/node_modules/.vite/
 
 # Cache / temp data
 backend/data/scryfall_cache.json
+backend/data/scryfall.db
 backend/data/scryfall_db.json
 backend/data/scryfall_db_meta.json
 backend/data/edhrec/

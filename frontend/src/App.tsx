@@ -60,7 +60,7 @@ export default function App() {
             <h1 className="text-2xl font-bold bg-gradient-to-r from-indigo-400 to-purple-400 text-transparent bg-clip-text">
               DeckCoach
             </h1>
-            <span className="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">EDH</span>
+            <span className="hidden md:block text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">Commander / EDH</span>
           </div>
 
           <nav className="flex gap-1 bg-gray-800 rounded-lg p-1">
