@@ -37,8 +37,9 @@ const ComboPanel: FC<ComboPanelProps> = ({ combos }) => {
     )
   }
 
-  const complete = combos.filter(c => c.is_complete)
-  const incomplete = combos.filter(c => !c.is_complete)
+  const hasDesc = (c: ComboInfo) => c.description && c.description.length > 60 && c.produces?.length > 0
+  const complete = combos.filter(c => c.is_complete).sort((a, b) => (hasDesc(b) ? 1 : 0) - (hasDesc(a) ? 1 : 0))
+  const incomplete = combos.filter(c => !c.is_complete).sort((a, b) => (hasDesc(b) ? 1 : 0) - (hasDesc(a) ? 1 : 0))
 
   return (
     <div className="space-y-4">

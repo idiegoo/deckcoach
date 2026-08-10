@@ -423,9 +423,12 @@ def get_top_cards_by_category(commander_name: str) -> Dict[str, list]:
     all_cards = get_all_cardlists(commander_name)
     # Filter to known category headers
     category_filters = [
-        "Creatures", "Instants", "Sorceries", "Artifacts",
-        "Enchantments", "Planeswalkers", "Battles",
-        "Lands", "Utility Lands", "Mana Artifacts", "Top Cards",
+        "Creatures", "Instants", "Sorceries",
+        "Mana Artifacts", "Utility Artifacts", "Artifacts",
+        "Enchantments",
+        "Planeswalkers", "Battles",
+        "Utility Lands", "Lands",
+        "Top Cards",
     ]
     result: Dict[str, list] = {}
     for header, cards in all_cards.items():

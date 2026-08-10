@@ -1726,7 +1726,8 @@ def detect_combos(deck: Deck, commander_name: str) -> List[dict]:
         combo_set = set(_norm(c) for c in combo["cards_in_deck"] + combo["missing_pieces"])
         for csb in csb_combos:
             csb_set = set(_norm(c) for c in csb.get("uses", []))
-            if csb_set == combo_set:
+            # Match if CSB cards are subset of our combo (exact or superset)
+            if csb_set and csb_set.issubset(combo_set):
                 combo["description"] = csb.get("description", combo["description"])
                 combo["produces"] = csb.get("produces", [])
                 combo["prerequisites"] = csb.get("prerequisites", "")
