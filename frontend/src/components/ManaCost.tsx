@@ -1,14 +1,17 @@
-const MANA_COLORS: Record<string, { bg: string; text: string }> = {
-  W: { bg: '#FEFDE8', text: '#1A1714' },
-  U: { bg: '#89CFF0', text: '#FFFFFF' },
-  B: { bg: '#B0ABA8', text: '#FFFFFF' },
-  R: { bg: '#F0A28E', text: '#FFFFFF' },
-  G: { bg: '#A3D5A0', text: '#FFFFFF' },
-  S: { bg: '#E0E8F4', text: '#2C3E50' },
+const MANA_BG: Record<string, string> = {
+  W: '#FFFDE6',
+  U: '#AADDF8',
+  B: '#C4B7B0',
+  R: '#F5A89A',
+  G: '#9ED3A0',
+  C: '#D4D8E0',
+  S: '#D4D8E0',
 }
-
-function getManaColor(token: string) {
-  return MANA_COLORS[token] || { bg: '#D4D0CD', text: '#1A1714' }
+const MANA_SVG: Record<string, string> = {
+  W: '/svg/w.svg', U: '/svg/u.svg', B: '/svg/b.svg', R: '/svg/r.svg', G: '/svg/g.svg',
+  C: '/svg/c.svg', S: '/svg/c.svg',
+  T: '/svg/tap.svg', Q: '/svg/untap.svg',
+  X: '/svg/x.svg', Y: '/svg/y.svg', Z: '/svg/z.svg',
 }
 
 interface ManaCostProps {
@@ -19,34 +22,51 @@ interface ManaCostProps {
 export default function ManaCost({ cost, size = 'sm' }: ManaCostProps) {
   if (!cost) return null
 
-  const sizeNum = size === 'md' ? 22 : 17
-  const fontSize = size === 'md' ? '11px' : '9px'
+  const sz = size === 'md' ? 22 : 15
+  const innerPad = size === 'md' ? 5 : 3
 
   const tokens = cost.match(/\{[^}]+\}/g) || []
 
   return (
-    <span className="inline-flex items-center gap-[2px] align-middle">
+    <span className="inline-flex items-center gap-[1px] align-middle">
       {tokens.map((token, i) => {
         const inner = token.replace(/[{}]/g, '')
-        const { bg, text } = getManaColor(inner)
+        const upper = inner.toUpperCase()
+        const bg = MANA_BG[upper]
+        const svg = MANA_SVG[upper] || MANA_SVG[inner] || `/svg/${inner.toLowerCase()}.svg`
+
+        if (bg) {
+          return (
+            <span
+              key={i}
+              className="inline-flex items-center justify-center rounded-full shrink-0"
+              style={{ width: sz, height: sz, backgroundColor: bg, boxShadow: '0 0 0 0.5px rgba(0,0,0,0.3)' }}
+            >
+              <img
+                src={svg}
+                alt={inner}
+                width={sz - innerPad}
+                height={sz - innerPad}
+                style={{ filter: 'brightness(0.25) contrast(1.2)' }}
+                className="inline-block"
+              />
+            </span>
+          )
+        }
+
+        // Generic / colorless / numbers
         return (
           <span
             key={i}
+            className="inline-flex items-center justify-center rounded-full shrink-0 font-bold"
             style={{
-              width: sizeNum,
-              height: sizeNum,
-              backgroundColor: bg,
-              color: text,
-              fontSize,
-              fontWeight: 700,
-              borderRadius: '50%',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              lineHeight: 1,
-              fontFamily: '"Beleren", "Segoe UI", system-ui, sans-serif',
+              width: sz,
+              height: sz,
+              backgroundColor: '#D4D0CD',
+              color: '#1A1714',
+              fontSize: size === 'md' ? '11px' : '8.5px',
+              boxShadow: '0 0 0 0.5px rgba(0,0,0,0.3)',
             }}
-            title={token}
           >
             {inner === 'T' ? '↻' : inner}
           </span>

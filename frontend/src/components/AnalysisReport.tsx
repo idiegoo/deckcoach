@@ -1,9 +1,17 @@
 import { useState } from 'react'
 import ManaCost from './ManaCost'
+import SvgIcon from './SvgIcon'
+import StaplesPanel from './StaplesPanel'
+import DeckComparison from './DeckComparison'
+import ComboPanel from './ComboPanel'
+import FlipCardImage from './FlipCardImage'
+import { useCardModal } from './CardModalContext'
 
 interface AnalysisReportProps {
   stats: any
   aiReport: string
+  budget?: 'normal' | 'budget' | 'expensive'
+  onBudgetChange?: (b: 'normal' | 'budget' | 'expensive') => void
 }
 
 const curveIcons: Record<string, string> = {
@@ -92,6 +100,9 @@ function DiagnosticBadge({
 }
 
 function DiagnosticPanel({ stats }: { stats: any }) {
+  const cardImages: Record<string, string> = stats.card_images || {};
+  const cardImagesBack: Record<string, string> = stats.card_images_back || {};
+  const { open: openModal } = useCardModal()
   const cat = stats.categories || {}
   const catCards = stats.category_cards || {}
   const [selected, setSelected] = useState<string | null>(null)
@@ -137,9 +148,7 @@ function DiagnosticPanel({ stats }: { stats: any }) {
     { label: 'Interacción / respuestas', value: cat.interaction, ...getThresholdExt('interaction', [6, 12], [3, 5], [0, 2]), cards: catCards.interaction || [], key: 'interaction' },
     { label: 'Tutores', value: cat.tutors, ...getThresholdExt('tutors', [2, 6], [1, 1], [0, 0]), cards: catCards.tutors || [], key: 'tutors' },
   ]
-
-  const activeItem = items.find((i) => i.key === selected)
-
+  
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2 flex-wrap">
@@ -163,7 +172,7 @@ function DiagnosticPanel({ stats }: { stats: any }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {items.map((item) => (
           <DiagnosticBadge
-            key={item.label}
+            key={item.key}
             label={item.label}
             value={item.value}
             good={item.good}
@@ -176,39 +185,56 @@ function DiagnosticPanel({ stats }: { stats: any }) {
         ))}
       </div>
 
-      {/* Expandable card list below grid */}
-      <div
-        className={`overflow-hidden transition-all duration-400 ease-in-out ${
-          activeItem ? 'max-h-[3000px] opacity-100 mt-3' : 'max-h-0 opacity-0'
-        }`}
-      >
-        {activeItem && (
-          <div className="glass rounded-xl p-4 border border-gray-700/50">
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-semibold text-gray-200">
-                📋 {activeItem.label} — {activeItem.cards.length} cartas
-              </h4>
-              <button
-                onClick={() => setSelected(null)}
-                className="text-gray-500 hover:text-gray-300 transition-colors text-lg leading-none"
-              >
-                ✕
-              </button>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-              {activeItem.cards.map((card, i) => (
-                <div
-                  key={i}
-                  className="text-xs px-2 py-1.5 rounded-lg border border-gray-700/50 bg-gray-800/50 text-gray-300 truncate hover:border-gray-500/50 transition-colors"
-                  title={card}
-                >
-                  {card}
+      {/* Shared expandable area — right after the grid */}
+      {(() => {
+        const activeItem = items.find((i) => i.key === selected)
+        return (
+          <div className={`overflow-hidden transition-all duration-300 ease-in-out ${
+            activeItem ? 'max-h-[3000px] opacity-100 mt-3' : 'max-h-0 opacity-0'
+          }`}>
+            {activeItem && (
+              <div className="glass rounded-xl p-4 border border-gray-700/50">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-semibold text-gray-200">
+                    {activeItem.label} — {activeItem.cards.length} cartas
+                  </h4>
+                  <button
+                    onClick={() => setSelected(null)}
+                    className="text-gray-500 hover:text-gray-300 transition-colors text-lg leading-none"
+                  >
+                    ✕
+                  </button>
                 </div>
-              ))}
-            </div>
+                <div className="flex flex-wrap gap-3">
+                  {activeItem.cards.map((card, i) => (
+                    <div key={i} className="flex flex-col items-center gap-1">
+                      {cardImages[card] ? (
+                        <FlipCardImage
+                          frontUrl={cardImages[card]}
+                          backUrl={cardImagesBack[card]}
+                          name={card}
+                          className="w-36 sm:w-44"
+                          onOpenModal={(current, back) => openModal(current, card, back)}
+                        />
+                      ) : (
+                        <div className="w-36 sm:w-44 aspect-[5/7] glass rounded-lg flex items-center justify-center">
+                          <span className="text-[10px] text-gray-500 text-center px-1">{card}</span>
+                        </div>
+                      )}
+                      <a
+                        href={`https://scryfall.com/search?q=!%22${encodeURIComponent(card)}%22`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] text-gray-300 text-center leading-tight max-w-[144px] sm:max-w-[176px] hover:underline"
+                      >{card}</a>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        )
+      })()}
 
       {/* Tierras + CMC recomendados (no expandibles) */}
       {thresholds.lands && thresholds.cmc && (() => {
@@ -291,7 +317,7 @@ function DiagnosticPanel({ stats }: { stats: any }) {
   )
 }
 
-export default function AnalysisReport({ stats, aiReport }: AnalysisReportProps) {
+export default function AnalysisReport({ stats, aiReport, budget }: AnalysisReportProps) {
   if (!stats) return null;
 
   if (stats.error) {
@@ -313,30 +339,40 @@ export default function AnalysisReport({ stats, aiReport }: AnalysisReportProps)
   return (
     <div className="mt-6 space-y-6 animate-in fade-in">
       {/* Commander banner */}
-      <div className="glass rounded-2xl p-6 bg-gradient-to-r from-indigo-900/30 to-purple-900/30">
-        <div className="flex items-center gap-4">
-          👑
-          <div className="flex-1">
-            <h2 className="text-xl font-bold text-white">{cmdr.name || 'Comandante'}</h2>
-            <p className="text-sm text-gray-400 flex items-center gap-2 flex-wrap">
-              <ManaCost cost={cmdr.mana_cost} />
-              <span>· CMC {cmdr.cmc}</span>
-              <span>· {cmdr.type}</span>
-              <span>· <ManaCost cost={(cmdr.color_identity || []).map((c: string) => `{${c}}`).join('')} /></span>
-            </p>
+      <div className="glass rounded-2xl p-4 sm:p-6 bg-gradient-to-r from-indigo-900/30 to-purple-900/30">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <span className="text-2xl shrink-0">&#128081;</span>
+            <div className="min-w-0">
+              <h2 className="text-lg sm:text-xl font-bold text-white truncate">{cmdr.name || 'Comandante'}</h2>
+              <p className="text-xs sm:text-sm text-gray-400 flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                <ManaCost cost={cmdr.mana_cost} />
+                <span className="hidden sm:inline">{cmdr.type}</span>
+              </p>
+              {cmdr.partner && (
+                <div className="mt-2 pt-2 border-t border-gray-700/50">
+                  <p className="text-xs text-gray-500 mb-1">Partner</p>
+                  <h3 className="text-sm font-semibold text-purple-300">{cmdr.partner.name}</h3>
+                  <p className="text-xs text-gray-400 flex items-center gap-2 flex-wrap mt-0.5">
+
+                    <span>· {cmdr.partner.type}</span>
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
           {stats.archetypes && stats.archetypes.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-1.5 sm:ml-auto sm:shrink-0">
               {stats.archetypes.map((a: any, i: number) => (
                 <span
                   key={a.name}
-                  className={`text-xs px-2.5 py-1 rounded-full whitespace-nowrap border flex items-center gap-1 ${
+                  className={`text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap border ${
                     i === 0
                       ? 'bg-indigo-900/60 text-indigo-300 border-indigo-700/40 font-semibold'
                       : 'bg-gray-800/60 text-gray-400 border-gray-700/40'
                   }`}
                 >
-                  🎯 {a.name} {a.weight < 0.99 ? `(${Math.round(a.weight * 100)}%)` : ''}
+                  {a.name} {a.weight < 0.99 ? `${Math.round(a.weight * 100)}%` : ''}
                 </span>
               ))}
             </div>
@@ -355,13 +391,15 @@ export default function AnalysisReport({ stats, aiReport }: AnalysisReportProps)
       )}
 
       {/* Stats grid */}
-      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-7 gap-3">
+      <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 gap-3">
         <StatCard label="Tierras" value={cat.lands} color="text-green-400" />
         <StatCard label="Criaturas" value={cat.creatures} color="text-amber-400" />
         <StatCard label="Artifacts" value={cat.artifacts} color="text-gray-200" />
         <StatCard label="Encant" value={cat.enchantments} color="text-purple-400" />
         <StatCard label="Instants" value={cat.instants} color="text-cyan-400" />
         <StatCard label="Conjuros" value={cat.sorceries} color="text-rose-400" />
+        <StatCard label="Planesw." value={cat.planeswalkers} color="text-orange-400" />
+        <StatCard label="Battles" value={cat.battles} color="text-fuchsia-400" />
         <StatCard label="CMC prom" value={stats.average_cmc} color="text-pink-400" />
       </div>
 
@@ -421,6 +459,34 @@ export default function AnalysisReport({ stats, aiReport }: AnalysisReportProps)
       ) : (
         <div className="glass rounded-2xl p-6">
           <DiagnosticPanel stats={stats} />
+        </div>
+      )}
+
+      {/* ─── New Sections: EDHREC Suggestions ─── */}
+      {stats.suggestions && Object.keys(stats.suggestions).length > 0 && (
+        <div className="glass rounded-2xl p-6">
+          <StaplesPanel
+            suggestions={stats.suggestions}
+          />
+        </div>
+      )}
+
+      {/* ─── Deck Comparison vs Average ─── */}
+      {stats.deck_comparison && (
+        <div className="glass rounded-2xl p-6">
+          <DeckComparison
+            comparison={stats.deck_comparison}
+            budget={budget}
+            cardImages={stats.card_images || {}}
+            cardImagesBack={stats.card_images_back || {}}
+          />
+        </div>
+      )}
+
+      {/* ─── Combo Detection ─── */}
+      {stats.combos && (
+        <div className="glass rounded-2xl p-6">
+          <ComboPanel combos={stats.combos} />
         </div>
       )}
     </div>

@@ -3,8 +3,6 @@ interface DeckInputProps {
   setDecklist: (v: string) => void
   onAnalyze: () => void
   loading: boolean
-  useAI: boolean
-  setUseAI: (v: boolean) => void
 }
 
 export default function DeckInput({
@@ -12,8 +10,6 @@ export default function DeckInput({
   setDecklist,
   onAnalyze,
   loading,
-  useAI,
-  setUseAI,
 }: DeckInputProps) {
   return (
     <div className="glass rounded-2xl p-6 space-y-4">
@@ -33,23 +29,14 @@ export default function DeckInput({
         </p>
       </div>
 
-      <div className="flex items-center justify-between glass rounded-xl p-3">
+      <div className="flex items-center justify-between glass rounded-xl p-3 opacity-60">
         <div className="flex items-center gap-3">
           <span className="text-sm text-gray-300">🧠 Análisis con IA</span>
-          <span className="text-xs text-gray-500">{useAI ? '(OpenAI gpt-4o-mini)' : '(solo estadísticas)'}</span>
+          <span className="text-xs text-gray-500">(próximamente)</span>
         </div>
-        <button
-          onClick={() => setUseAI(!useAI)}
-          className={`relative w-12 h-6 rounded-full transition-colors duration-200 ${
-            useAI ? 'bg-indigo-600' : 'bg-gray-700'
-          }`}
-        >
-          <div
-            className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200 ${
-              useAI ? 'translate-x-6' : 'translate-x-0'
-            }`}
-          />
-        </button>
+        <div className="relative w-12 h-6 rounded-full bg-gray-700 cursor-not-allowed">
+          <div className="absolute top-0.5 left-0.5 w-5 h-5 bg-gray-500 rounded-full shadow" />
+        </div>
       </div>
 
       <button

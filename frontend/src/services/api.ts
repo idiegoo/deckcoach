@@ -5,8 +5,18 @@ const api = axios.create({
   timeout: 120000,
 });
 
-export async function analyzeDeck(decklist: string, commander: string, useAI: boolean) {
-  const { data } = await api.post('/analyze', { decklist, commander, use_ai: useAI });
+export async function analyzeDeck(
+  decklist: string,
+  commander: string,
+  useAI: boolean,
+  budget?: string
+) {
+  const { data } = await api.post('/analyze', {
+    decklist,
+    commander,
+    use_ai: useAI,
+    budget: budget || undefined,
+  });
   return data;
 }
 

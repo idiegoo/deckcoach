@@ -301,3 +301,223 @@ def edhrec_tags_to_weights(tag_counts: Dict[str, int]) -> Dict[str, float]:
         weights[internal] += count / total
 
     return weights
+
+
+# ── pyedhrec-powered functions (new features) ──────────────────────────────
+
+from pyedhrec import EDHRec
+
+_pyedhrec: Optional[EDHRec] = None
+
+
+def _get_pyedhrec() -> EDHRec:
+    global _pyedhrec
+    if _pyedhrec is None:
+        _pyedhrec = EDHRec()
+    return _pyedhrec
+
+
+def _pyedhrec_disk_path(slug: str, kind: str) -> str:
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    return os.path.join(CACHE_DIR, f"{slug}_{kind}.json")
+
+
+def _pyedhrec_load_disk(slug: str, kind: str) -> Optional[dict]:
+    path = _pyedhrec_disk_path(slug, kind)
+    if not os.path.exists(path):
+        return None
+    age = time.time() - os.path.getmtime(path)
+    if age > CACHE_TTL:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _pyedhrec_save_disk(slug: str, kind: str, data: dict):
+    path = _pyedhrec_disk_path(slug, kind)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+
+
+def _extract_card_name(cv: dict) -> str:
+    """Extract card name from a pyedhrec cardview dict (flexible field names)."""
+    for key in ("name", "card_name", "card"):
+        val = cv.get(key)
+        if isinstance(val, str):
+            return val
+        if isinstance(val, dict):
+            n = val.get("name")
+            if n:
+                return n
+    return cv.get("header", "")
+
+
+def _compute_inclusion_pct(cv: dict) -> float:
+    """Compute inclusion percentage from pyedhrec cardview (num_decks / potential_decks * 100)."""
+    num = cv.get("num_decks", 0)
+    pot = cv.get("potential_decks", 0)
+    if pot and num:
+        return round(num / pot * 100, 1)
+    return 0.0
+
+
+def _extract_card_score(cv: dict) -> float:
+    """Extract a score from cardview — prefer synergy, fallback to inclusion %."""
+    synergy = cv.get("synergy")
+    if isinstance(synergy, (int, float)) and synergy != 0:
+        return round(float(synergy), 4)
+    return _compute_inclusion_pct(cv)
+
+
+def get_all_cardlists(commander_name: str) -> Dict[str, list]:
+    """
+    Fetch ALL cardlists from EDHREC for a commander using pyedhrec.
+    Returns {section_name: [{name, score}, ...]}
+    Uses disk cache (24h TTL).
+    """
+    slug = _commander_to_slug(commander_name)
+
+    cached = _pyedhrec_load_disk(slug, "cardlists")
+    if cached:
+        return cached
+
+    try:
+        edh = _get_pyedhrec()
+        raw = edh.get_commander_cards(commander_name)
+    except Exception as e:
+        print(f"[pyedhrec] Error fetching cardlists for {commander_name}: {e}")
+        return {}
+
+    if not raw:
+        return {}
+
+    result: Dict[str, list] = {}
+    for header, cardviews in raw.items():
+        cards = []
+        if isinstance(cardviews, list):
+            for cv in cardviews:
+                name = _extract_card_name(cv)
+                if name:
+                    cards.append({
+                        "name": str(name),
+                        "score": _extract_card_score(cv),
+                        "inclusion_pct": _compute_inclusion_pct(cv),
+                        "num_decks": cv.get("num_decks", 0),
+                    })
+        if cards:
+            result[str(header)] = cards
+
+    _pyedhrec_save_disk(slug, "cardlists", result)
+    return result
+
+
+def get_top_cards_by_category(commander_name: str) -> Dict[str, list]:
+    """
+    Returns top cards organized by functional category.
+    Keys like 'Creatures', 'Instants', 'Sorceries', 'Artifacts',
+    'Enchantments', 'Planeswalkers', 'Lands', 'Mana Artifacts', 'Utility Lands'.
+    """
+    all_cards = get_all_cardlists(commander_name)
+    # Filter to known category headers
+    category_filters = [
+        "Creatures", "Instants", "Sorceries", "Artifacts",
+        "Enchantments", "Planeswalkers", "Battles",
+        "Lands", "Utility Lands", "Mana Artifacts", "Top Cards",
+    ]
+    result: Dict[str, list] = {}
+    for header, cards in all_cards.items():
+        for cat in category_filters:
+            if cat.lower() in header.lower():
+                result[cat] = cards
+                break
+    return result
+
+
+def get_high_synergy_for_commander(commander_name: str) -> list:
+    """Returns high synergy cards for a commander."""
+    all_cards = get_all_cardlists(commander_name)
+    for header, cards in all_cards.items():
+        if "high synergy" in header.lower() or "synergy" in header.lower():
+            return cards
+    return []
+
+
+def get_new_for_commander(commander_name: str) -> list:
+    """Returns recently trending/new cards for a commander."""
+    all_cards = get_all_cardlists(commander_name)
+    for header, cards in all_cards.items():
+        if "new card" in header.lower() or "new" in header.lower():
+            return cards
+    return []
+
+
+def get_average_decklist(commander_name: str, budget: Optional[str] = None) -> Optional[dict]:
+    """
+    Returns the average decklist from EDHREC.
+    budget: None = normal, 'budget' = budget version, 'expensive' = expensive version.
+    Returns {'commander': str, 'cards': [{name, quantity}]}
+    """
+    slug = _commander_to_slug(commander_name)
+    kind = f"avgdeck_{budget or 'normal'}"
+
+    cached = _pyedhrec_load_disk(slug, kind)
+    if cached:
+        return cached
+
+    try:
+        edh = _get_pyedhrec()
+        if budget:
+            raw = edh.get_commanders_average_deck(commander_name, budget)
+        else:
+            raw = edh.get_commanders_average_deck(commander_name)
+    except Exception as e:
+        print(f"[pyedhrec] Error fetching avg deck for {commander_name}: {e}")
+        return None
+
+    if not raw:
+        return None
+
+    deck_data = raw.get("decklist") or raw.get("deck") or {}
+    # pyedhrec wraps: {commander, decklist: {commander, cards: {Artifact: [[name,qty]...], ...}}}
+    inner = deck_data if isinstance(deck_data, dict) else {}
+    cards_dict = inner.get("cards", {})
+    
+    cards = []
+    if isinstance(cards_dict, dict):
+        # cards is {type_name: [[name, qty], ...]}
+        for type_name, card_list in cards_dict.items():
+            if isinstance(card_list, list):
+                for entry in card_list:
+                    if isinstance(entry, list) and len(entry) >= 2:
+                        cards.append({
+                            "name": str(entry[0]),
+                            "quantity": int(entry[1]),
+                            "type": type_name.lower(),
+                        })
+                    elif isinstance(entry, str):
+                        cards.append({"name": entry, "quantity": 1, "type": type_name.lower()})
+    elif isinstance(cards_dict, list):
+        for entry in cards_dict:
+            if isinstance(entry, dict):
+                name = entry.get("name") or entry.get("card", "")
+                qty = entry.get("quantity") or entry.get("count", 1)
+                cards.append({"name": str(name), "quantity": int(qty) if qty else 1})
+            elif isinstance(entry, str):
+                cards.append({"name": entry, "quantity": 1})
+
+    result = {"commander": raw.get("commander", commander_name), "cards": cards}
+    _pyedhrec_save_disk(slug, kind, result)
+    return result
+
+    for tag, count in tag_counts.items():
+        internal = EDHREC_TAG_MAP.get(tag)
+        if internal is None:
+            continue
+        if internal not in weights:
+            weights[internal] = 0.0
+        weights[internal] += count / total
+
+    return weights

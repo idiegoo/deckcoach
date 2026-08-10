@@ -4,9 +4,10 @@ from .models import Card, Deck
 from .analyzer import categorize
 
 class HandEvaluation:
-    def __init__(self, hand: List[Card], commander: Card):
+    def __init__(self, hand: List[Card], commander: Card, partner: Optional[Card] = None):
         self.hand = hand
         self.commander = commander
+        self.partner = partner
         self.lands = [c for c in hand if c.type_line and "land" in c.type_line.lower()]
         self.nonlands = [c for c in hand if c not in self.lands]
         self.land_count = len(self.lands)
@@ -78,7 +79,7 @@ def simulate_opening_hands(deck: Deck, iterations: int = 1000) -> Dict[str, Any]
 
     for _ in range(iterations):
         hand = random.sample(decklist, 7)
-        ev = HandEvaluation(hand, deck.commander)
+        ev = HandEvaluation(hand, deck.commander, deck.partner)
         land_counts.append(ev.land_count)
         # Simple heuristic for keep
         if 2 <= ev.land_count <= 5:

@@ -1,4 +1,7 @@
 import re
+import json
+import time
+import os
 from typing import List, Dict, Any, Optional
 from .models import Card, Deck
 from .scryfall import ScryfallClient
@@ -80,6 +83,15 @@ class CategoryStats:
             "graveyard": self.graveyard,
         }
 
+def _is_section_header(line: str) -> bool:
+    """Check if line is a sideboard/maybeboard section header."""
+    lower = line.strip().lower()
+    return any(lower.startswith(h) for h in [
+        "sideboard", "maybeboard", "// sideboard", "// maybeboard",
+        "sideboard:", "maybeboard:",
+    ])
+
+
 def parse_decklist(text: str) -> List[tuple]:
     lines = text.strip().splitlines()
     cards = []
@@ -87,6 +99,8 @@ def parse_decklist(text: str) -> List[tuple]:
         line = line.strip()
         if not line or line.startswith("//") or line.startswith("#"):
             continue
+        if _is_section_header(line):
+            break  # stop at sideboard/maybeboard
         # Match quantity + card name (ignore set info/comments)
         m = re.match(r"^(\d+)\s+(.+?)(?:\s+#.*)?$", line)
         if not m:
@@ -101,9 +115,15 @@ def parse_decklist(text: str) -> List[tuple]:
             cards.append((qty, name))
     return cards
 
-def split_commander_from_deck(text: str) -> tuple[List[tuple], Optional[str]]:
-    """Returns (deck_cards, commander_name) auto-detecting commander from list."""
+def split_commander_from_deck(text: str) -> tuple:
+    """Returns (deck_cards, commander_name, partner_name_or_None) auto-detecting from list."""
     raw = text.strip()
+
+    def _clean_card_name(name: str) -> str:
+        name = re.sub(r"\s+\(\w+\)\s*\d*\s*$", "", name)
+        name = re.sub(r"\s+\*\w+\*?$", "", name)
+        name = re.sub(r"\s+\*CMDR\*|\s+\*F\*|\s+\(Commander\)|\s+#!Commander", "", name)
+        return name.strip()
 
     # Strategy 1: // Commander section header
     cmdr_match = re.search(r"(?im)^\s*//\s*Commander\s*$", raw, re.MULTILINE)
@@ -111,16 +131,18 @@ def split_commander_from_deck(text: str) -> tuple[List[tuple], Optional[str]]:
         main = raw[:cmdr_match.start()].strip()
         cmdr_section = raw[cmdr_match.end():].strip()
         cmdr_lines = cmdr_section.splitlines()
+        commanders = []
         for line in cmdr_lines:
             line = line.strip()
             if not line or line.startswith("//") or line.startswith("#"):
                 continue
             m = re.match(r"^(\d+)?\s*(.+?)(\s+\*[CM]+\*|\s+\(Commander\))?\s*$", line)
             if m:
-                name = m.group(2).strip()
-                name = re.sub(r"\s+\(\w+\)\s*\d*\s*$", "", name)
-                name = re.sub(r"\s+\*\w+\*?$", "", name)
-                return parse_decklist(main), name
+                commanders.append(_clean_card_name(m.group(2)))
+        if commanders:
+            cmdr = commanders[0]
+            partner = commanders[1] if len(commanders) > 1 else None
+            return parse_decklist(main), cmdr, partner
 
     # Strategy 2: blank line separator (Moxfield default)
     parts = re.split(r"\n\s*\n", raw)
@@ -128,52 +150,52 @@ def split_commander_from_deck(text: str) -> tuple[List[tuple], Optional[str]]:
         main = "\n".join(parts[:-1])
         cmdr_section = parts[-1].strip()
         cmdr_lines = cmdr_section.splitlines()
+        commanders = []
         for line in cmdr_lines:
             line = line.strip()
             if not line or line.startswith("//") or line.startswith("#"):
                 continue
             m = re.match(r"^(\d+)?\s*(.+?)(\s+\*[CM]+\*|\s+\(Commander\)|\s+#!Commander)?\s*$", line)
             if m:
-                name = m.group(2).strip()
-                name = re.sub(r"\s+\(\w+\)\s*\d*\s*$", "", name)
-                name = re.sub(r"\s+\*\w+\*?$", "", name)
-                return parse_decklist(main), name
+                commanders.append(_clean_card_name(m.group(2)))
+        if commanders:
+            cmdr = commanders[0]
+            partner = commanders[1] if len(commanders) > 1 else None
+            return parse_decklist(main), cmdr, partner
 
     # Strategy 3: marked commander inline (*CMDR*, *F*, (Commander), #!Commander)
     lines = raw.splitlines()
     deck_cards = []
-    commander_name = None
+    commanders = []
     for line in lines:
         line = line.strip()
         if not line or line.startswith("//") or line.startswith("#"):
             continue
+        if _is_section_header(line):
+            break  # stop at sideboard/maybeboard
         is_cmdr = bool(re.search(r"\*CMDR\*|\*F\*|\(Commander\)|#!Commander", line))
         m = re.match(r"^(\d+)\s+(.+?)(?:\s+#.*)?$", line)
         if not m:
-            name = line
-            name = re.sub(r"\s+\*CMDR\*|\s+\*F\*|\s+\(Commander\)|\s+#!Commander", "", name)
-            name = re.sub(r"\s+\(\w+\)\s*\d*\s*$", "", name)
-            name = re.sub(r"\s+\*\w+\*?$", "", name)
+            name = _clean_card_name(line)
             if is_cmdr:
-                commander_name = name
+                commanders.append(name)
             else:
                 deck_cards.append((1, name))
         else:
             qty = int(m.group(1))
-            name = m.group(2).strip()
-            name = re.sub(r"\s+\(\w+\)\s*\d*\s*$", "", name)
-            name = re.sub(r"\s+\*\w+\*?$", "", name)
-            name = re.sub(r"\s+\*CMDR\*|\s+\*F\*|\s+\(Commander\)|\s+#!Commander", "", name)
+            name = _clean_card_name(m.group(2).strip())
             if is_cmdr:
-                commander_name = name
+                commanders.append(name)
             else:
                 deck_cards.append((qty, name))
 
-    if commander_name:
-        return deck_cards, commander_name
+    if commanders:
+        cmdr = commanders[0]
+        partner = commanders[1] if len(commanders) > 1 else None
+        return deck_cards, cmdr, partner
 
     # Strategy 4: no commander found - return all as deck
-    return parse_decklist(raw), None
+    return parse_decklist(raw), None, None
 
 def fetch_deck(cards_raw: List[tuple]) -> List[Card]:
     unique_names = list({n for _, n in cards_raw})
@@ -230,6 +252,8 @@ def analyze_deck(deck: Deck) -> Dict[str, Any]:
     cmc_values = []
     color_counts = {}
     commander_cid = set(deck.commander.color_identity or [])
+    if deck.partner and deck.partner.color_identity:
+        commander_cid |= set(deck.partner.color_identity)
     illegal_cards = []
     nonland_mana_sources = 0
     total_cards = sum(c.quantity for c in deck.cards)
@@ -305,12 +329,37 @@ def analyze_deck(deck: Deck) -> Dict[str, Any]:
         "name": deck.commander.name,
         "mana_cost": deck.commander.mana_cost,
         "cmc": deck.commander.cmc,
-        "color_identity": deck.commander.color_identity,
+        "color_identity": list(commander_cid) if commander_cid else deck.commander.color_identity,
         "type": deck.commander.type_line,
         "oracle_text": deck.commander.oracle_text,
     }
+    if deck.partner:
+        commander_info["partner"] = {
+            "name": deck.partner.name,
+            "mana_cost": deck.partner.mana_cost,
+            "cmc": deck.partner.cmc,
+            "color_identity": deck.partner.color_identity,
+            "type": deck.partner.type_line,
+            "oracle_text": deck.partner.oracle_text,
+        }
+        partner_oracle = deck.partner.oracle_text or ""
+    else:
+        partner_oracle = ""
 
     archetype, archetype_thresholds, archetypes_list = detect_archetype(deck, stats)
+
+    # Build card image map for frontend display
+    card_image_map: Dict[str, str] = {}
+    card_image_back_map: Dict[str, str] = {}
+    for card in deck.cards + [deck.commander]:
+        if card.image_url:
+            card_image_map[card.name] = card.image_url
+            if card.image_url_back:
+                card_image_back_map[card.name] = card.image_url_back
+    if deck.partner and deck.partner.image_url:
+        card_image_map[deck.partner.name] = deck.partner.image_url
+        if deck.partner.image_url_back:
+            card_image_back_map[deck.partner.name] = deck.partner.image_url_back
 
     return {
         "total_cards": total_cards,
@@ -324,6 +373,8 @@ def analyze_deck(deck: Deck) -> Dict[str, Any]:
         "archetype": archetype,
         "archetype_thresholds": archetype_thresholds,
         "archetypes": archetypes_list,
+        "card_images": card_image_map,
+        "card_images_back": card_image_back_map,
     }
 
 
@@ -1071,6 +1122,9 @@ def detect_archetype(deck: Deck, stats: CategoryStats) -> tuple[str, Dict[str, L
     """Returns (primary_archetype, blended_thresholds, top_archetypes_list)."""
     cmdr_text = (deck.commander.oracle_text or "").lower()
     cmdr_type = (deck.commander.type_line or "").lower()
+    if deck.partner:
+        cmdr_text += " " + (deck.partner.oracle_text or "").lower()
+        cmdr_type += " " + (deck.partner.type_line or "").lower()
 
     all_oracle = " ".join((c.oracle_text or "").lower() for c in deck.cards)
     all_names = " ".join(c.name.lower() for c in deck.cards)
@@ -1112,9 +1166,13 @@ def detect_archetype(deck: Deck, stats: CategoryStats) -> tuple[str, Dict[str, L
     edhrec_weights: Dict[str, float] = {}
     try:
         edhrec_raw = get_tag_counts(deck.commander.name)
-        edhrec_weights = edhrec_tags_to_weights(edhrec_raw)
+        if edhrec_raw:
+            edhrec_weights = edhrec_tags_to_weights(edhrec_raw)
     except Exception:
         pass  # fallback: EDHREC weights stay empty
+
+    if not edhrec_weights:
+        edhrec_weights = {}
 
     # ── Hybrid blending: 35% EDHREC community + 65% user's deck ──
     all_tags = set(kw_norm.keys()) | set(edhrec_weights.keys())
@@ -1170,3 +1228,483 @@ def detect_archetype(deck: Deck, stats: CategoryStats) -> tuple[str, Dict[str, L
     ]
 
     return primary, blended, archetypes_list
+
+
+# ─── New Feature: Missing Staples ──────────────────────────────────────────
+
+def find_missing_staples(deck: Deck, commander_name: str) -> Dict[str, list]:
+    """
+    Compare deck against EDHREC top cards and return missing staples
+    grouped by category with inclusion percentages and Scryfall image URLs.
+    """
+    from .edhrec import get_top_cards_by_category
+
+    deck_names = {c.name.lower() for c in deck.cards}
+    deck_names.add(deck.commander.name.lower())
+    if deck.partner:
+        deck_names.add(deck.partner.name.lower())
+
+    # Also resolve deck cards to their official Scryfall names (fuzzy matches)
+    # so renames like "S.H.I.E.L.D. Spy Satellite" → "Fellwar Stone" are excluded
+    try:
+        from .card_db import get_card_db
+        db = get_card_db()
+        db._ensure_loaded()
+        for c in deck.cards:
+            resolved = db.fuzzy_get(c.name)
+            if resolved:
+                official = resolved.get("name", "")
+                if official:
+                    deck_names.add(official.lower())
+                    if " // " in official:
+                        deck_names.add(official.split(" // ")[0].lower())
+        if deck.partner:
+            resolved = db.fuzzy_get(deck.partner.name)
+            if resolved:
+                official = resolved.get("name", "")
+                if official:
+                    deck_names.add(official.lower())
+                    if " // " in official:
+                        deck_names.add(official.split(" // ")[0].lower())
+    except Exception:
+        pass
+
+    result: Dict[str, list] = {}
+    all_missing_names = []
+
+    try:
+        edhrec_data = get_top_cards_by_category(commander_name)
+    except Exception:
+        return result
+
+    # Also get New Cards and High Synergy from EDHREC
+    try:
+        from .edhrec import get_all_cardlists
+        all_cards = get_all_cardlists(commander_name)
+    except Exception:
+        all_cards = {}
+
+    # Build categories with proper ordering
+    ordered_result: Dict[str, list] = {}
+
+    # 1. Top Cards first
+    if "Top Cards" in edhrec_data:
+        ordered_result["Top Cards"] = []
+    # 2. New Cards
+    if "New Cards" in all_cards:
+        ordered_result["New Cards"] = []
+    # 3. Then all type categories
+    for cat in edhrec_data:
+        if cat not in ordered_result:
+            ordered_result[cat] = []
+    # 4. Ensure Battles
+    if "Battles" not in ordered_result:
+        ordered_result["Battles"] = []
+
+    # Populate Top Cards
+    for card in edhrec_data.get("Top Cards", []):
+        name = card.get("name", "")
+        if name.lower() not in deck_names:
+            inclusion = card.get("inclusion_pct", card.get("score", 0))
+            if inclusion > 5:
+                ordered_result["Top Cards"].append({
+                    "name": name, "inclusion_pct": round(inclusion, 1), "category": "Top Cards",
+                })
+                all_missing_names.append(name)
+
+    # Populate New Cards (no inclusion filter — they're all new/trending)
+    for card in all_cards.get("New Cards", []):
+        name = card.get("name", "")
+        if name.lower() not in deck_names:
+            ordered_result["New Cards"].append({
+                "name": name, "inclusion_pct": card.get("inclusion_pct", card.get("score", 0)),
+                "category": "New Cards",
+            })
+            all_missing_names.append(name)
+
+    # Populate type categories
+    for category in edhrec_data:
+        if category in ("Top Cards",):
+            continue
+        for card in edhrec_data.get(category, []):
+            name = card.get("name", "")
+            if name.lower() not in deck_names:
+                inclusion = card.get("inclusion_pct", card.get("score", 0))
+                if inclusion > 5:
+                    ordered_result[category].append({
+                        "name": name, "inclusion_pct": round(inclusion, 1), "category": category,
+                    })
+                    all_missing_names.append(name)
+
+    result = ordered_result
+
+    # Batch-fetch Scryfall images for all missing cards
+    if all_missing_names:
+        scryfall_data = client.get_cards(all_missing_names)
+        for category in result:
+            for card in result[category]:
+                raw = scryfall_data.get(card["name"])
+                if raw:
+                    # Extract image URL (same logic as ScryfallClient.to_card_model)
+                    image_url = None
+                    if raw.get("image_uris") and isinstance(raw["image_uris"], dict):
+                        image_url = raw["image_uris"].get("normal")
+                    elif raw.get("card_faces") and isinstance(raw["card_faces"], list):
+                        faces = raw["card_faces"]
+                        if faces and isinstance(faces[0], dict):
+                            uris = faces[0].get("image_uris", {})
+                            image_url = uris.get("normal") if isinstance(uris, dict) else None
+                    card["image_url"] = image_url or ""
+
+    return result
+
+
+# ─── New Feature: Deck Comparison ──────────────────────────────────────────
+
+def compare_to_average(deck: Deck, commander_name: str, budget: Optional[str] = None) -> dict:
+    """
+    Compare user's deck against the EDHREC average deck.
+    Returns similarity %, land comparison, missing common cards, unique user cards.
+    """
+    from .edhrec import get_average_decklist
+
+    result = {
+        "similarity_pct": 0,
+        "avg_lands": 0,
+        "user_lands": 0,
+        "missing_common": [],
+        "unique_user_cards": [],
+    }
+
+    user_names = {c.name.lower() for c in deck.cards}
+    user_names.add(deck.commander.name.lower())
+    if deck.partner:
+        user_names.add(deck.partner.name.lower())
+
+    # Also resolve to official Scryfall names
+    try:
+        from .card_db import get_card_db
+        db = get_card_db()
+        db._ensure_loaded()
+        for c in deck.cards + ([deck.partner] if deck.partner else []):
+            resolved = db.fuzzy_get(c.name)
+            if resolved:
+                official = resolved.get("name", "")
+                if official:
+                    user_names.add(official.lower())
+                    if " // " in official:
+                        user_names.add(official.split(" // ")[0].lower())
+    except Exception:
+        pass
+
+    try:
+        avg = get_average_decklist(commander_name, budget=budget)
+    except Exception:
+        return result
+
+    if not avg:
+        return result
+
+    avg_cards = avg.get("cards", [])
+    avg_names = {c.get("name", "").lower() for c in avg_cards if c.get("name")}
+
+    if not avg_names:
+        return result
+
+    # Jaccard similarity
+    intersection = user_names & avg_names
+    union = user_names | avg_names
+    result["similarity_pct"] = round(len(intersection) / len(union) * 100, 1) if union else 0
+
+    # Missing common cards (in average deck but not in user's)
+    result["missing_common"] = list(avg_names - user_names)[:15]
+
+    # Unique user cards (in user's deck but not in average)
+    result["unique_user_cards"] = list(user_names - avg_names)[:15]
+
+    # Land comparison
+    # Count lands in average deck (use type field if available)
+    result["avg_lands"] = 0
+    for c in avg_cards:
+        ctype = (c.get("type") or "").lower()
+        name = (c.get("name") or "").lower()
+        qty = int(c.get("quantity", 1))
+        if "land" in ctype or "basic" in ctype or "nonbasic" in ctype:
+            result["avg_lands"] += qty
+        elif any(t in name for t in ["plains", "island", "swamp", "mountain", "forest",
+                                       "land", "garden", "basin", "tower", "crypt",
+                                       "bog", "mire", "thicket", "shrine", "pool",
+                                       "wastes", "heath", "strand", "delta", "foothills"]):
+            result["avg_lands"] += qty
+
+    # Count user lands
+    user_land_count = 0
+    for c in deck.cards:
+        if c.type_line and "land" in c.type_line.lower():
+            user_land_count += c.quantity
+    result["user_lands"] = user_land_count
+
+    return result
+
+
+# ─── New Feature: Combo Detection (pyedhrec + CSB descriptions) ─────────────
+
+import requests as _req
+
+COMBOS_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "combos")
+COMBOS_CACHE_TTL = 86400
+
+
+def _combos_cache_path(commander_name: str) -> str:
+    slug = re.sub(r"[^a-z0-9\-]", "", commander_name.lower().replace(" ", "-")).strip("-")
+    os.makedirs(COMBOS_CACHE_DIR, exist_ok=True)
+    return os.path.join(COMBOS_CACHE_DIR, f"edhrec_{slug}.json")
+
+
+def _csb_cache_path(commander_name: str) -> str:
+    slug = re.sub(r"[^a-z0-9\-]", "", commander_name.lower().replace(" ", "-")).strip("-")
+    os.makedirs(COMBOS_CACHE_DIR, exist_ok=True)
+    return os.path.join(COMBOS_CACHE_DIR, f"csb_{slug}.json")
+
+
+def _fetch_csb_combos(commander_name: str) -> list:
+    """Scrape Commander Spellbook search page for combos involving a commander."""
+    cache_path = _csb_cache_path(commander_name)
+    if os.path.exists(cache_path):
+        age = time.time() - os.path.getmtime(cache_path)
+        if age < COMBOS_CACHE_TTL:
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+
+    try:
+        resp = _req.get(
+            "https://commanderspellbook.com/search/",
+            params={"q": commander_name},
+            timeout=15,
+            headers={"User-Agent": "DeckCoach/1.0"},
+        )
+        if resp.status_code != 200:
+            return []
+
+        html = resp.text
+        match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html)
+        if not match:
+            return []
+
+        data = json.loads(match.group(1))
+        combos = data.get("props", {}).get("pageProps", {}).get("combos", [])
+    except Exception as e:
+        print(f"[CSB] Error fetching combos for {commander_name}: {e}")
+        return []
+
+    # Extract just what we need
+    result = []
+    for c in (combos or []):
+        uses = [u.get("card", {}).get("name", "") for u in c.get("uses", []) if u.get("card")]
+        result.append({
+            "uses": uses,
+            "description": c.get("description", ""),
+            "produces": [p.get("feature", {}).get("name", "") for p in c.get("produces", [])],
+            "prerequisites": c.get("notablePrerequisites", ""),
+            "bracketTag": c.get("bracketTag", ""),
+            "manaNeeded": c.get("manaNeeded", ""),
+        })
+
+    try:
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+    return result
+
+
+def detect_combos(deck: Deck, commander_name: str) -> List[dict]:
+    """
+    Detect known combos involving the commander via pyedhrec.
+    Cache only raw combo card lists, compute deck matches fresh each call.
+    """
+    cache_path = _combos_cache_path(commander_name)
+
+    # Load raw combo data from cache (just card names per combo, no match data)
+    raw_combos = None
+    if os.path.exists(cache_path):
+        age = time.time() - os.path.getmtime(cache_path)
+        if age < COMBOS_CACHE_TTL:
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    raw_combos = json.load(f)
+            except Exception:
+                pass
+
+    if raw_combos is None:
+        try:
+            from pyedhrec import EDHRec
+            edh = EDHRec()
+            raw = edh.get_card_combos(commander_name)
+        except Exception as e:
+            print(f"[combos] pyedhrec error: {e}")
+            return []
+
+        if not raw:
+            return []
+
+        container = raw.get("container", {})
+        json_dict = container.get("json_dict", {})
+        cardlists = json_dict.get("cardlists", [])
+
+        raw_combos = []
+        for cl in (cardlists or []):
+            header = cl.get("header", "")
+            cardviews = cl.get("cardviews", [])
+            combo_cards = []
+            for cv in (cardviews or []):
+                name = cv.get("name", "")
+                if name:
+                    combo_cards.append(name)
+            if combo_cards:
+                raw_combos.append({
+                    "header": header,
+                    "cards": combo_cards,
+                })
+
+        try:
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(raw_combos, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    # Build deck name set for matching
+    deck_names = {c.name.lower() for c in deck.cards}
+    deck_names.add(deck.commander.name.lower())
+    if deck.partner:
+        deck_names.add(deck.partner.name.lower())
+
+    # Also resolve to official Scryfall names for fuzzy-matched cards
+    try:
+        from .card_db import get_card_db
+        db = get_card_db()
+        db._ensure_loaded()
+        for c in deck.cards + ([deck.partner] if deck.partner else []):
+            resolved = db.fuzzy_get(c.name)
+            if resolved:
+                official = resolved.get("name", "")
+                if official:
+                    deck_names.add(official.lower())
+                    if " // " in official:
+                        deck_names.add(official.split(" // ")[0].lower())
+    except Exception:
+        pass
+
+    # Match raw combos against current deck
+    combos = []
+    # Collect all card names from relevant combos for image fetching
+    all_combo_card_names = set()
+
+    # ── pyedhrec link (shared) ──
+    try:
+        from pyedhrec import EDHRec as _EDHRecClass
+        _edh_link = _EDHRecClass().get_card_link(commander_name) + "/combos"
+    except Exception:
+        _edh_link = ""
+
+    for rc in (raw_combos or []):
+        combo_cards = rc.get("cards", [])
+        cards_in_deck = []
+        missing = []
+        for cname in combo_cards:
+            if cname.lower() in deck_names:
+                cards_in_deck.append(cname)
+            else:
+                missing.append(cname)
+
+        # Skip combos where the user doesn't have any relevant cards
+        if not cards_in_deck:
+            continue
+
+        all_combo_card_names.update(combo_cards)
+
+        # Clean up header: remove deck count suffix for cleaner display
+        desc = rc.get("header", "")
+        desc = re.sub(r"\s*\(\d+\s*decks?\)\s*$", "", desc).strip()
+
+        # Build a readable how-to from the card names involved
+        parts = desc.split(" + ")
+        if len(parts) >= 2:
+            how_to = f"Combo de {len(parts)} cartas. "
+            if parts[0] == commander_name or parts[0].lower() == commander_name.lower():
+                how_to += f"Tu comandante {parts[0]} habilita el combo con {' + '.join(parts[1:])}."
+            else:
+                how_to += f"Con {' + '.join(parts)}."
+        else:
+            how_to = desc
+
+        combos.append({
+            "combo_id": f"edhrec_{len(combos)}",
+            "description": desc,
+            "how_to": how_to,
+            "edhrec_link": _edh_link,
+            "produces": [],
+            "cards_in_deck": cards_in_deck,
+            "missing_pieces": missing,
+            "is_complete": len(missing) == 0,
+            "mana_needed": "",
+            "bracket": "",
+            "prerequisites": "",
+        })
+
+    # ── Merge Commander Spellbook descriptions ──
+    try:
+        csb_combos = _fetch_csb_combos(commander_name)
+    except Exception:
+        csb_combos = []
+
+    for combo in combos:
+        # Try to find matching CSB combo by comparing card names
+        # CSB uses are a subset of our combo's cards (all cards involved)
+        combo_set = set(c.lower() for c in combo["cards_in_deck"] + combo["missing_pieces"])
+        for csb in csb_combos:
+            csb_set = set(c.lower() for c in csb.get("uses", []))
+            # Exact match: all CSB uses are in our combo and vice versa
+            if csb_set == combo_set:
+                combo["description"] = csb.get("description", combo["description"])
+                combo["produces"] = csb.get("produces", [])
+                combo["prerequisites"] = csb.get("prerequisites", "")
+                combo["bracket"] = csb.get("bracketTag", "")
+                combo["mana_needed"] = csb.get("manaNeeded", "")
+                break
+
+    # Batch-fetch Scryfall images for all combo cards
+    card_images: Dict[str, str] = {}
+    card_images_back: Dict[str, str] = {}
+    if all_combo_card_names:
+        scryfall_data = client.get_cards(list(all_combo_card_names))
+        for name in all_combo_card_names:
+            raw = scryfall_data.get(name)
+            if raw:
+                image_url = None
+                image_url_back = None
+                if raw.get("image_uris") and isinstance(raw["image_uris"], dict):
+                    image_url = raw["image_uris"].get("large") or raw["image_uris"].get("normal")
+                elif raw.get("card_faces") and isinstance(raw["card_faces"], list):
+                    faces = raw["card_faces"]
+                    if faces and isinstance(faces[0], dict):
+                        uris = faces[0].get("image_uris", {})
+                        image_url = uris.get("large") or uris.get("normal") if isinstance(uris, dict) else None
+                    if len(faces) >= 2 and isinstance(faces[1], dict):
+                        uris_back = faces[1].get("image_uris", {})
+                        image_url_back = uris_back.get("large") or uris_back.get("normal") if isinstance(uris_back, dict) else None
+                if image_url:
+                    card_images[name] = image_url
+                if image_url_back:
+                    card_images_back[name] = image_url_back
+
+        # Attach images to each combo
+        for combo in combos:
+            combo["card_images"] = card_images
+            combo["card_images_back"] = card_images_back
+
+    return combos

@@ -1,0 +1,2 @@
+### Documentación Continua
+- Cada vez que se implemente una nueva funcionalidad, se modifique la arquitectura o cambien los comandos de uso, debes actualizar automáticamente el archivo `README.md` para reflejar dichos cambios de forma clara y concisa.

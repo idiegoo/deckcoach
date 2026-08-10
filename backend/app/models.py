@@ -10,6 +10,7 @@ class Card(BaseModel):
     type_line: Optional[str] = None
     oracle_text: Optional[str] = None
     image_url: Optional[str] = None
+    image_url_back: Optional[str] = None
     mana_cost: Optional[str] = None
 
 class Deck(BaseModel):
@@ -23,10 +24,27 @@ class AnalyzeRequest(BaseModel):
     partner: Optional[str] = None
     format: str = "commander"
     use_ai: bool = True
+    budget: Optional[str] = None  # None = normal, "budget", "expensive"
 
 class AnalyzeResponse(BaseModel):
     stats: Dict[str, Any]
     ai_report: str
+
+class StapleSuggestion(BaseModel):
+    name: str
+    inclusion_pct: float
+    category: str
+
+class ComboInfo(BaseModel):
+    combo_id: str
+    description: str
+    produces: List[str] = []
+    cards_in_deck: List[str] = []
+    missing_pieces: List[str] = []
+    is_complete: bool = False
+    mana_needed: str = ""
+    bracket: str = ""
+    prerequisites: str = ""
 
 class MulliganRequest(BaseModel):
     decklist: str

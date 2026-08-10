@@ -3,5 +3,6 @@ uvicorn[standard]
 pydantic
 python-dotenv
 openai
+pyedhrec
 requests
 numpy

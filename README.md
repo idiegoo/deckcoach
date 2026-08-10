@@ -1,6 +1,6 @@
 # 🧙 DeckCoach
 
-Coach de Magic: The Gathering para jugadores novatos de Commander (EDH). Analiza tu mazo, detecta automáticamente el comandante y los arquetipos temáticos con datos reales de EDHREC, ajusta las recomendaciones y te ayuda a decidir si hacer mulligan.
+Coach de Magic: The Gathering para jugadores de Commander (EDH). Analiza tu mazo con datos reales de EDHREC y Scryfall, detecta arquetipos, encuentra combos, sugiere mejoras y te ayuda a decidir si hacer mulligan.
 
 ## 🚀 Quick Start
 
@@ -18,7 +18,7 @@ cp .env.example .env
 # Edita .env y pega tu OPENAI_API_KEY
 ```
 
-Sin API key la app funciona igual: estadísticas y panel de diagnóstico completo.
+Sin API key la app funciona igual: estadísticas, panel de diagnóstico, sugerencias, combos — todo sin IA.
 
 ### 2. Backend (Python/FastAPI)
 
@@ -33,10 +33,17 @@ python -m venv venv
 .\venv\Scripts\Activate.ps1
 
 pip install -r requirements.txt
+
+# Opción A: Directo con Python (recomendado para desarrollo)
+python main.py
+
+# Opción B: Con uvicorn
 uvicorn main:app --reload --port 8000
 ```
 
 Backend en `http://localhost:8000`.
+
+> En WSL/Linux: si `uvicorn` no se encuentra, activá el venv primero (`source venv/bin/activate`). No uses `apt install uvicorn`.
 
 ### 3. Frontend (React/Vite)
 
@@ -54,132 +61,63 @@ Frontend en `http://localhost:5173`.
 
 ### Pegar un mazo
 
-Pega tu lista de 99 cartas en el textarea. **No necesitas escribir el comandante aparte** — el sistema lo detecta automáticamente:
+Pega tu lista en el textarea. El comandante se detecta automáticamente:
 
-- **Moxfield**: el comandante va al final, separado por un espacio en blanco
-  ```
-  1 Sol Ring
-  1 Arcane Signet
-  37 Plains
-
-  1 Tivit, Seller of Secrets
-  ```
-- **Archidekt**: usa secciones `// Main` y `// Commander`
-  ```
-  // Main
-  1 Sol Ring
-  ...
-  // Commander
-  1 Krenko, Mob Boss
-  ```
+- **Moxfield**: comandante al final, separado por blank line
+- **Archidekt**: secciones `// Main` y `// Commander`
 - **Inline**: marca el comandante con `*CMDR*` o `(Commander)`
+- **Sideboard**: las secciones `SIDEBOARD:` y `MAYBEBOARD:` se ignoran automáticamente
+- **Partners**: si hay dos comandantes marcados, el segundo se detecta como partner
 
 ### Lo que obtienes
 
-- **Curva de maná** con barras y CMC promedio
-- **Distribución de tipos** (criaturas, instants, artifacts, etc.)
-- **Roles funcionales** detectados con heurísticas: ramp, draw, removal, wipes, tutores, interacción, graveyard
-- **Clickea cualquier categoría** para ver exactamente qué cartas la componen (animación expand/colapse)
-- **Detección de arquetipos** híbrida: tags reales de EDHREC + análisis de tu mazo
-- **Umbrales dinámicos combinados**: los rangos "óptimo/aceptable/mejorable" son promedio ponderado de todos los arquetipos detectados
-- **Tierras + CMC recomendados** según los arquetipos combinados (con estatus verde/amarillo/rojo)
-- **Simulación Monte Carlo** de 1000 manos iniciales
-- **Reporte del coach IA** (opcional, toggle) contextualizado a los arquetipos
-
-### Coach de Mulligan
-
-Pestaña **Mulligan**: escribí tu mano de 7 cartas (separadas por coma o una por línea). El sistema usará el mazo de la pestaña Análisis.
-
-### Toggle de IA
-
-| Modo | Sin IA | Con IA |
-|------|--------|--------|
-| Deck | Panel de diagnóstico + badges + lista de cartas | Reporte narrativo en español |
-| Mulligan | Razones heurísticas del sistema | Consejo narrativo del coach |
-| Costo | Gratis | ~$0.0014/sesión (gpt-4o-mini) |
-
----
-
-## 🎯 Sistema de arquetipos — blending híbrido EDHREC + deck
-
-### Dos fuentes de datos, un solo score
-
-El sistema combina **dos fuentes independientes** para determinar los arquetipos de tu mazo:
-
-| Fuente | Peso | Qué mide |
-|--------|------|----------|
-| **EDHREC** (`tag_counts`) | 35% | Cómo construye la comunidad ese comandante (datos reales de miles de decks) |
-| **Deck keywords** | 65% | Qué sinergias elegiste VOS en tu mazo (análisis de tus 99 cartas) |
-
-Esto significa que si tu mazo se desvía del arquetipo comunitario hacia una sinergia niche, el sistema lo detecta y ajusta los pesos. Ej: Y'shtola es "Control" en EDHREC, pero si armaste una versión Lifegain, Lifegain sube en el ranking aunque la comunidad no lo juegue tanto.
-
-### Algoritmo de scoring
-
-1. **Keyword matching del mazo**: cada arquetipo tiene `commander_kw` (×5 puntos por hit en texto del comandante) y `deck_kw` (×1.5 por hit en las 99 cartas, cap 6). El type bias suma hasta 8 puntos por proporción de tipos de carta.
-2. **Normalización sigmoid**: `kw_score / (kw_score + 10)` — evita que un solo keyword domine, exige múltiples coincidencias para un score alto.
-3. **EDHREC tag_counts**: se consulta `json.edhrec.com` → se obtienen los tags reales del comandante con conteos de decks → se normalizan a [0,1] y se escalan ×5.
-4. **Blending**: `score[tag] = 0.35 × EDHREC + 0.65 × deck_keywords`
-5. **Selección adaptativa**:
-   - Arquetipo dominante > 70% → **1 arquetipo**
-   - Top 2 suman > 88% → **2 arquetipos**
-   - Caso contrario → **3 arquetipos balanceados**
-
-### Blending de thresholds
-
-Los umbrales recomendados se calculan como **promedio ponderado** de los thresholds de cada arquetipo detectado:
-
-```
-Deck 60% cEDH + 40% Spellslinger
-Tierras: 0.6 × [27,30] + 0.4 × [32,36] = [29, 32]
-Ramp:   0.6 × [8,12]  + 0.4 × [8,12]  = [8, 12]
-```
-
-### Visualización
-
-En el banner del comandante y en el panel de diagnóstico se muestran **hasta 3 badges** con el nombre del arquetipo y su peso porcentual. El badge primario va resaltado en índigo, los secundarios en gris. Si hay un solo arquetipo dominante, se omite el porcentaje.
-
-### Fallback
-
-Si EDHREC no responde (sin conexión, rate limit), el sistema usa exclusivamente los keywords del mazo. El caché de EDHREC dura 24 horas para minimizar requests.
+| Feature | Descripción |
+|---|---|
+| **Curva de maná** | Barras por bucket (0-1, 2-3, 4-5, 6+) con CMC promedio |
+| **Distribución de tipos** | 9 tipos: Tierras, Criaturas, Artifacts, Encant, Instants, Conjuros, Planesw., Battles, CMC |
+| **Roles funcionales** | Ramp, draw, removal, wipes, tutores, interacción, graveyard — click expande la lista de cartas con imágenes |
+| **Arquetipos** | 100+ arquetipos detectados con blending híbrido EDHREC (65%) + keywords del mazo (35%) |
+| **Umbrales dinámicos** | Rangos óptimo/aceptable/mejorable calculados como promedio ponderado de arquetipos |
+| **Simulación Monte Carlo** | 1000 manos iniciales, keep/mulligan rate |
+| **Staples que te faltan** | Cartas populares agrupadas por tipo con % de inclusión, sidebar con íconos SVG |
+| **Comparación vs promedio** | % similitud con el mazo promedio de EDHREC, cartas únicas y comunes ausentes |
+| **Detección de combos** | Combos del comandante vía EDHREC + descripciones paso a paso de Commander Spellbook |
+| **Cartas de alta sinergia** | Joyas ocultas con sinergia inusualmente alta para tu comandante |
+| **Cartas nuevas/trending** | Qué está ganando popularidad recientemente |
+| **Versiones budget/expensive** | Toggle para comparar contra mazo promedio budget, normal o caro |
+| **Partners** | Color identity combinada, detección dual automática |
+| **Cartas double-faced** | Click en la imagen para girarla (flip 3D), ver ambas caras |
+| **Fullscreen** | Click en cualquier carta → modal a pantalla completa |
+| **Links a Scryfall** | Click en nombre de carta → página de Scryfall |
+| **Símbolos de maná** | Renderizados como SVGs oficiales de Magic |
+| **Reporte IA** | GPT-4o-mini contextualizado por arquetipo (opcional, ~$0.0014/sesión) |
+| **Responsive** | Sidebar horizontal en mobile, grids adaptativos |
 
 ---
 
-## 📊 Arquetipos detectados (100+ tags)
+## 🎯 Sistema de arquetipos
 
-| Categoría | Arquetipos |
-|-----------|-----------|
-| **Estrategia** | cEDH / Combo, Control / Stax, Aggro, Midrange |
-| **Mecánica** | Spellslinger, Storm, Reanimator, Blink / ETB, Mill, Wheels, Burn, Cascade / Discover, Cycling, Dredge, Cantrips, Extra Turns, X Spells, Toolbox, Sacrifice, Self-Mill, Spell Copy, Ninjutsu, Mutate, Morph, Flash, Bounce, Prowess, Madness, Hellbent, Suspend, Polymorph |
-| **Temática** | Artifacts, Enchantress, Equipment, Voltron, Tokens, +1/+1 Counters, -1/-1 Counters, Aristocrats, Lifegain, Lifedrain, Group Hug, Group Slug, Politics / Voting, Monarch, Treasure, Food, Clues / Investigate, Energy, Superfriends, Auras, Sagas, Shrines, Adventures, Dungeon, Battles |
-| **Control/Stax** | Pillow Fort, Hatebears, Land Destruction, Discard, Forced Combat, Theft, Chaos, Creatureless, Prison, Counterspells |
-| **Ramp/Tierras** | Lands / Landfall, Big Mana, Stompy, Kicker, Tron, Guildgates |
-| **Tribal** | Tribal / Typal, Dragons, Goblins, Elves, Zombies, Slivers, Eldrazi, Dinos, Clones, Party, Defenders, Weenies |
-| **Especializados** | Pingers, Tap/Untap, Activated Abilities, Topdeck, Scry, Impulse Draw, Coin Flip, Modular, Eggs, Exile, Surveil, Proliferate, Self-Damage, Glass Cannon, Fight, Unblockable, Power Matters, Toughness Matters, Flying, Convoke, Graveyard, Histórico |
-| **Fallback** | General / Midrange |
+El sistema combina dos fuentes independientes para determinar los arquetipos:
 
-| Arquetipo | Ramp | Draw | Removal | Wipes | Tutores | Interacción | Tierras | CMC |
-|-----------|------|------|---------|-------|---------|-------------|---------|-----|
-| cEDH / Combo | 8–12 | 10–16 | 4–7 | 0–2 | 8–14 | 10–16 | 27–30 | 1.5–2.2 |
-| Spellslinger | 8–12 | 12–18 | 6–10 | 2–4 | 2–5 | 6–10 | 32–36 | 2.0–2.8 |
-| Voltron | 8–12 | 6–10 | 4–8 | 2–4 | 4–8 | 4–8 | 33–37 | 2.0–2.8 |
-| Lands / Landfall | 14–22 | 8–12 | 5–9 | 2–4 | 2–6 | 4–8 | 38–45 | 2.5–3.5 |
-| Artifacts | 12–18 | 8–12 | 5–9 | 2–4 | 4–8 | 4–8 | 30–35 | 2.0–2.8 |
-| Enchantress | 8–12 | 8–12 | 5–9 | 2–4 | 3–6 | 6–10 | 34–37 | 2.5–3.5 |
-| Tokens | 8–12 | 8–12 | 4–8 | 2–4 | 2–5 | 4–8 | 34–37 | 2.5–3.5 |
-| Control / Stax | 8–12 | 8–12 | 8–14 | 3–6 | 3–6 | 10–16 | 35–38 | 2.5–3.2 |
-| Dragons | 12–18 | 8–12 | 5–9 | 2–4 | 2–5 | 4–8 | 35–40 | 3.0–4.5 |
-| Goblins | 6–10 | 8–12 | 4–8 | 1–3 | 2–5 | 4–8 | 32–36 | 1.8–2.8 |
-| Elves | 12–18 | 8–12 | 4–8 | 1–3 | 4–8 | 4–8 | 30–34 | 1.8–2.8 |
-| Eldrazi | 12–18 | 6–10 | 4–8 | 2–4 | 2–5 | 4–8 | 34–38 | 3.5–5.5 |
-| Ninjutsu | 6–10 | 10–15 | 4–8 | 2–4 | 2–5 | 6–10 | 32–36 | 2.5–4.0 |
-| Storm | 6–10 | 12–18 | 2–5 | 0–2 | 3–6 | 6–10 | 28–32 | 1.2–2.0 |
-| Lifegain | 8–12 | 8–12 | 6–10 | 2–4 | 2–4 | 4–8 | 34–37 | 2.5–3.5 |
-| Reanimator | 8–12 | 10–15 | 6–10 | 2–4 | 4–8 | 4–8 | 34–37 | 2.5–3.5 |
-| Aristocrats | 8–12 | 8–12 | 6–10 | 2–4 | 2–6 | 4–8 | 33–37 | 2.0–2.8 |
-| Superfriends | 8–12 | 8–12 | 6–10 | 3–6 | 3–6 | 6–10 | 35–39 | 2.8–3.5 |
-| Politics / Voting | 8–12 | 10–15 | 4–8 | 2–4 | 2–4 | 4–8 | 35–38 | 2.5–3.5 |
-| Infect | 6–10 | 8–12 | 4–8 | 0–2 | 2–4 | 6–10 | 32–36 | 1.8–2.5 |
-| General / Midrange | 10–14 | 10–15 | 8–14 | 2–5 | 2–6 | 6–12 | 35–38 | 2.5–3.5 |
+| Fuente | Peso | Datos |
+|---|---|---|
+| **Deck keywords** | 65% | Análisis del texto de tus 99 cartas + comandante |
+| **EDHREC** | 35% | `tag_counts` reales de la comunidad para ese comandante |
+
+Los umbrales recomendados (ramp, draw, removal, etc.) se calculan como promedio ponderado de los arquetipos detectados. Si EDHREC no responde, se usa solo keywords del mazo.
+
+---
+
+## 📊 Fuentes de datos
+
+| Fuente | Qué provee | Método |
+|---|---|---|
+| **Scryfall Local DB** | 38k cartas (oracle_cards) | Descarga única (~23MB), refresh cada 7 días, 0 HTTP en el 99% de consultas |
+| **Scryfall API** | Cartas nuevas/raras | Fallback con fuzzy search para renames/UB |
+| **EDHREC (json.edhrec.com)** | Tag counts para arquetipos | Cache 24h en `data/edhrec/` |
+| **pyedhrec (NextJS API)** | Top cards, sinergia, trending, mazo promedio, combos | Cache 24h en disco |
+| **Commander Spellbook** | Descripciones paso a paso de combos | Scraping del search page, cache 24h en `data/combos/` |
+| **OpenAI (gpt-4o-mini)** | Reportes narrativos en español | Opcional, ~$0.0014/sesión |
 
 ---
 
@@ -188,40 +126,57 @@ Si EDHREC no responde (sin conexión, rate limit), el sistema usa exclusivamente
 ```
 deckcoach/
 ├── backend/
-│   ├── main.py                  # FastAPI app (/api/analyze, /api/mulligan)
-│   ├── .env.example
-│   ├── requirements.txt
+│   ├── main.py                    # FastAPI: /api/analyze, /api/mulligan
+│   ├── .env.example               # OPENAI_API_KEY template
+│   ├── requirements.txt           # Python deps
 │   ├── app/
-│   │   ├── models.py            # Pydantic models
-│   │   ├── scryfall.py          # Scryfall API client + card cache
-│   │   ├── edhrec.py            # EDHREC client + 24h cache + tag mapping (80+ tags)
-│   │   ├── analyzer.py          # Deck analysis, 100+ archetypes, hybrid EDHREC+deck blending
-│   │   ├── simulator.py         # Monte Carlo hand simulation + mulligan evaluation
-│   │   └── ai_service.py        # OpenAI integration (gpt-4o-mini, contextualizado por arquetipo)
+│   │   ├── models.py              # Pydantic: Card, Deck, AnalyzeRequest, ComboInfo, etc.
+│   │   ├── scryfall.py            # Scryfall API client + local DB + retry/fuzzy
+│   │   ├── card_db.py             # Local card database (oracle_cards bulk download)
+│   │   ├── edhrec.py              # EDHREC: tag_counts + pyedhrec (top cards, sinergia, combos)
+│   │   ├── analyzer.py            # Deck parsing, categorization, archetype detection + staples + combos
+│   │   ├── simulator.py           # Monte Carlo hand simulation + mulligan evaluation
+│   │   └── ai_service.py          # OpenAI integration (gpt-4o-mini)
 │   └── data/
-│       ├── scryfall_cache.json  # Auto-generated card cache
-│       └── edhrec/              # EDHREC per-commander cache (24h TTL)
-└── frontend/
-    ├── public/
-    │   └── Mana.svg             # Mana symbol sprite sheet
-    └── src/
-        ├── App.tsx              # Layout, tabs, toggle IA
-        ├── components/
-        │   ├── DeckInput.tsx    # Textarea de mazo + toggle IA
-        │   ├── AnalysisReport.tsx # Stats, curva, diagnóstico interactivo, badges multi-arquetipo
-        │   ├── MulliganCoach.tsx  # Input de mano + resultado mulligan
-        │   ├── ManaCost.tsx     # Símbolos de maná estilizados (colores canónicos Magic)
-        │   └── Icons.tsx        # SVG logo del wizard
-        └── services/
-            └── api.ts
+│       ├── scryfall_db.json       # Local card DB (63MB, auto-downloaded)
+│       ├── scryfall_cache.json    # API response cache
+│       ├── edhrec/                # EDHREC per-commander cache
+│       └── combos/                # Combo data cache
+├── frontend/
+│   ├── public/svg/                # 300+ Magic: The Gathering SVG icons (Keyrune)
+│   └── src/
+│       ├── App.tsx                # Layout, tabs, toggle IA, budget
+│       ├── components/
+│       │   ├── DeckInput.tsx      # Decklist input + AI toggle
+│       │   ├── AnalysisReport.tsx # Full report: stats, diagnostic, curve, simulation
+│       │   ├── MulliganCoach.tsx  # Mulligan advisor
+│       │   ├── StaplesPanel.tsx   # Missing staples with category sidebar + images
+│       │   ├── DeckComparison.tsx # Average deck comparison
+│       │   ├── ComboPanel.tsx     # Combo detection with CSB descriptions + card images
+│       │   ├── BudgetToggle.tsx   # Normal/Budget/Expensive filter
+│       │   ├── FlipCardImage.tsx  # Double-faced card flip animation (3D)
+│       │   ├── CardModalContext.tsx # Global fullscreen card viewer
+│       │   ├── ManaCost.tsx       # Mana symbols as colored SVGs
+│       │   ├── ManaText.tsx       # Inline mana symbols in text ({2}{G}{U})
+│       │   ├── SvgIcon.tsx        # Generic Magic SVG icon
+│       │   └── Icons.tsx          # Wizard logo SVG
+│       └── services/
+│           └── api.ts             # Axios API client
+├── Dockerfile                     # Multi-stage: Node build → Python runtime
+├── fly.toml                       # Fly.io deployment config
+├── railway.json                   # Railway deployment config
+├── PLAN.md                        # Feature implementation plan
+└── README.md                      # This file
 ```
 
 ---
 
 ## 🧠 IA y costos
 
+La IA está **desactivada por defecto**. Activá el toggle "Análisis con IA" para obtener reportes narrativos.
+
 | Acción | Modelo | Costo aprox |
-|--------|--------|-------------|
+|---|---|---|
 | Análisis de mazo | gpt-4o-mini | $0.0008 |
 | Consejo mulligan | gpt-4o-mini | $0.0006 |
 | **Total sesión** | | **~$0.0014** |
@@ -230,11 +185,21 @@ La simulación de manos corre en Python puro. El LLM traduce datos y arquetipos 
 
 ---
 
-## ⚠️ Notas
+## 🔮 Roadmap / Futuras features
 
-- **EDHREC**: la primera consulta de un comandante tarda ~1s (fetch HTTP a `json.edhrec.com`). Luego usa caché de 24h en `backend/data/edhrec/`. Si EDHREC no responde, el sistema usa exclusivamente keywords del mazo sin perder funcionalidad.
-- **User-Agent**: tanto Scryfall como EDHREC requieren User-Agent personalizado. El cliente ya lo incluye (`DeckCoach/1.0`).
-- **Caché Scryfall**: solo se guardan resultados exitosos. Fallos de red no se cachean para permitir reintentos.
-- **Detección de comandante**: automática por blank line, `// Commander`, `*CMDR*` o `(Commander)`.
-- **Heurísticas**: los roles funcionales (ramp, draw, removal) se detectan por keywords en el oracle text. Puede haber falsos positivos.
-- **Alpha**: para desarrollo local. Sin autenticación, rate limiting ni base de datos.
+- **Análisis con IA** — reportes narrativos del coach usando GPT-4o-mini para estadísticas, curva de maná y balance de cartas
+- **Descripciones IA para combos** — generación automática de explicaciones paso a paso para combos que no tengan descripción en Commander Spellbook
+- **Historial de análisis** — guardar mazos analizados y comparar evolución
+- **Exportar análisis** — PDF o imagen del reporte para compartir
+- **Modo multiplayer** — sesiones compartidas para revisar mazos en grupo
+
+---
+
+## ⚠️ Notas técnicas
+
+- **Base de datos local**: descarga `oracle_cards` de Scryfall (~23MB comprimido, 38k cartas) → `scryfall_db.json` (63MB). Se refresca cada 7 días. El 99% de las consultas se resuelven sin HTTP.
+- **Rate limiting Scryfall**: la DB local elimina los rate limits. Si la API falla (429), aplica retry con backoff suave.
+- **Fuzzy search**: cartas con nombres alternativos (UB, silver-bordered, renames) se resuelven automáticamente.
+- **Double-faced cards**: indexadas tanto por nombre completo como solo cara frontal. Imágenes de ambas caras disponibles.
+- **Cachés**: todos los caches externos (EDHREC, CSB, pyedhrec) usan TTL de 24h en disco.
+- **Sideboard**: detectado y filtrado automáticamente en `parse_decklist` y `split_commander_from_deck`.

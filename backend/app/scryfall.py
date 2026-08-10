@@ -2,10 +2,12 @@ import requests
 import time
 import json
 import os
+import threading
 from typing import List, Optional, Dict
 from .models import Card
 
 CACHE_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "scryfall_cache.json")
+
 
 class ScryfallClient:
     def __init__(self):
@@ -16,6 +18,23 @@ class ScryfallClient:
         })
         self.cache: Dict[str, dict] = {}
         self._load_cache()
+        self._db = None
+        self._db_init_lock = threading.Lock()
+
+    def _get_local_db(self):
+        if self._db is not None:
+            return self._db
+        with self._db_init_lock:
+            if self._db is not None:
+                return self._db
+            try:
+                from .card_db import get_card_db
+                self._db = get_card_db()
+                self._db._ensure_loaded()
+            except Exception as e:
+                print(f"[Scryfall] Local DB init failed: {e}, using API only")
+                self._db = False
+            return self._db
 
     def _load_cache(self):
         try:
@@ -31,11 +50,38 @@ class ScryfallClient:
             json.dump(self.cache, f, ensure_ascii=False, indent=2)
 
     def _normalize_name(self, name: str) -> str:
-        # Remove comments/set codes after // for split cards, use front face
         name = name.strip()
         if " // " in name:
             name = name.split(" // ")[0]
         return name
+
+    def _rate_limit_wait(self):
+        time.sleep(0.15)
+
+    def _request_with_retry(self, method, url, timeout=10, **kwargs):
+        for attempt in range(2):
+            try:
+                if method == "POST":
+                    resp = self.session.post(url, timeout=timeout, **kwargs)
+                else:
+                    resp = self.session.get(url, timeout=timeout, **kwargs)
+                self._rate_limit_wait()
+
+                if resp.status_code == 429:
+                    wait = min(3 * (attempt + 1), 10)
+                    print(f"[Scryfall] Rate limited, waiting {wait}s...")
+                    time.sleep(wait)
+                    continue
+                if resp.status_code >= 500:
+                    time.sleep(1)
+                    continue
+                return resp
+            except Exception as e:
+                if attempt == 0:
+                    time.sleep(1)
+                    continue
+                print(f"[Scryfall] Connection error: {e}")
+        return None
 
     def get_cards(self, names: List[str]) -> Dict[str, Optional[dict]]:
         results = {}
@@ -47,76 +93,119 @@ class ScryfallClient:
             else:
                 to_fetch.append(key)
 
-        if to_fetch:
-            print(f"[Scryfall] Fetching {len(to_fetch)} unique cards...")
+        if not to_fetch:
+            return results
 
-        # Scryfall collection endpoint allows max 75 identifiers per request
+        # Try local database first (instant, no HTTP)
+        db = self._get_local_db()
+        if db:
+            local_results = db.get_cards(to_fetch)
+            still_missing = []
+            for name in to_fetch:
+                card = local_results.get(name)
+                if not card:
+                    # Try fuzzy in local DB too
+                    card = db.fuzzy_get(name)
+                if card:
+                    self.cache[name] = card
+                    results[name] = card
+                else:
+                    still_missing.append(name)
+
+            if not still_missing:
+                print(f"[Scryfall] All {len(to_fetch)} cards resolved from local DB")
+                self._save_cache()
+                return results
+
+            print(f"[Scryfall] Local DB: {len(to_fetch) - len(still_missing)}/{len(to_fetch)} found, {len(still_missing)} need API")
+            to_fetch = still_missing
+
+        # Fall back to API for remaining cards
+        if to_fetch:
+            self._api_resolve(to_fetch, results)
+        else:
+            self._save_cache()
+
+        return results
+
+    def _api_resolve(self, to_fetch: List[str], results: Dict[str, Optional[dict]]):
+        print(f"[Scryfall] API fetching {len(to_fetch)} unique cards...")
+
         chunk_size = 75
+        unresolved = []
+
         for i in range(0, len(to_fetch), chunk_size):
             chunk = to_fetch[i:i+chunk_size]
             identifiers = [{"name": n} for n in chunk]
-            try:
-                resp = self.session.post(
-                    "https://api.scryfall.com/cards/collection",
-                    json={"identifiers": identifiers},
-                    timeout=30
-                )
-            except Exception as e:
-                print(f"[Scryfall] Connection error: {e}")
+
+            resp = self._request_with_retry(
+                "POST",
+                "https://api.scryfall.com/cards/collection",
+                timeout=30,
+                json={"identifiers": identifiers},
+            )
+
+            if resp is None or resp.status_code != 200:
                 for n in chunk:
                     results[n] = None
-                # Don't cache failures - retry next time
                 continue
 
-            time.sleep(0.1)  # be polite
-            if resp.status_code != 200:
-                print(f"[Scryfall] Bulk endpoint returned {resp.status_code}: {resp.text[:200]}")
-                # fallback to individual requests, results from _fetch_single are not cached on failure
-                for n in chunk:
-                    results[n] = self._fetch_single(n)
-                continue
             data = resp.json()
-            found = len(data.get("data", []))
-            not_found = len(data.get("not_found", []))
-            print(f"[Scryfall] Found {found}, not found {not_found}")
-            for card in data.get("data", []):
+            found = data.get("data", [])
+            not_found = data.get("not_found", [])
+            print(f"[Scryfall] Chunk {i//chunk_size + 1}: found {len(found)}, not found {len(not_found)}")
+
+            for card in found:
                 key = self._normalize_name(card.get("name", ""))
                 self.cache[key] = card
                 results[key] = card
-            for err in data.get("not_found", []):
-                key = err.get("name", "")
-                self.cache[key] = None
-                results[key] = None
+
+            for err in not_found:
+                unresolved.append(err.get("name", ""))
+
+        if unresolved:
+            print(f"[Scryfall] Fuzzy-resolving {len(unresolved)} not-found cards...")
+            for name in unresolved:
+                card = self._fuzzy_lookup(name)
+                if card:
+                    self.cache[name] = card
+                    results[name] = card
+                else:
+                    self.cache[name] = None
+                    results[name] = None
 
         self._save_cache()
-        return results
+
+    def _fuzzy_lookup(self, name: str) -> Optional[dict]:
+        resp = self._request_with_retry(
+            "GET",
+            "https://api.scryfall.com/cards/named",
+            timeout=10,
+            params={"fuzzy": name},
+        )
+        if resp and resp.status_code == 200:
+            card = resp.json()
+            print(f"[Scryfall] Fuzzy: '{name}' → '{card.get('name', '?')}'")
+            return card
+        return None
 
     def _fetch_single(self, name: str) -> Optional[dict]:
-        try:
-            resp = self.session.get(
-                "https://api.scryfall.com/cards/named",
-                params={"exact": name},
-                timeout=10
-            )
-            time.sleep(0.1)
-            if resp.status_code == 200:
-                card = resp.json()
-                self.cache[name] = card
-                return card
-            else:
-                # Don't cache failures - retry next time
-                return None
-        except Exception:
-            return None
+        return self._fuzzy_lookup(name)
 
     def to_card_model(self, name: str, quantity: int, raw: Optional[dict]) -> Card:
         if not raw:
             return Card(name=name, quantity=quantity)
         image = None
-        if "image_uris" in raw:
+        image_back = None
+        if raw.get("image_uris"):
             image = raw["image_uris"].get("normal")
-        elif "card_faces" in raw and raw["card_faces"]:
-            image = raw["card_faces"][0].get("image_uris", {}).get("normal")
+        elif raw.get("card_faces"):
+            faces = raw["card_faces"]
+            if len(faces) >= 2:
+                image = faces[0].get("image_uris", {}).get("normal")
+                image_back = faces[1].get("image_uris", {}).get("normal")
+            elif faces:
+                image = faces[0].get("image_uris", {}).get("normal")
 
         return Card(
             name=name,
@@ -127,5 +216,6 @@ class ScryfallClient:
             type_line=raw.get("type_line"),
             oracle_text=raw.get("oracle_text", ""),
             image_url=image,
-            mana_cost=raw.get("mana_cost")
+            image_url_back=image_back,
+            mana_cost=raw.get("mana_cost") or ((raw.get("card_faces") or [{}])[0].get("mana_cost") if raw.get("card_faces") else None),
         )
