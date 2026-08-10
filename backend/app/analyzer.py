@@ -1711,8 +1711,11 @@ def detect_combos(deck: Deck, commander_name: str) -> List[dict]:
         })
 
     # ── Merge Commander Spellbook descriptions ──
-    # Collect unique card names from combos as fallback for CSB search
-    fallback_names = list({c for combo in combos for c in combo["cards_in_deck"] + combo["missing_pieces"]})
+    # Collect card names from combos, prioritize most frequent ones for CSB fallback
+    from collections import Counter
+    all_combo_cards = [c for combo in combos for c in combo["cards_in_deck"] + combo["missing_pieces"]]
+    card_freq = Counter(all_combo_cards)
+    fallback_names = [card for card, _ in card_freq.most_common(5)]
     try:
         csb_combos = _fetch_csb_combos(commander_name, fallback_cards=fallback_names)
     except Exception:
@@ -1724,16 +1727,18 @@ def detect_combos(deck: Deck, commander_name: str) -> List[dict]:
             return name.split(" // ")[0].strip().lower()
 
         combo_set = set(_norm(c) for c in combo["cards_in_deck"] + combo["missing_pieces"])
+        best = None
         for csb in csb_combos:
             csb_set = set(_norm(c) for c in csb.get("uses", []))
-            # Match if CSB cards are subset of our combo (exact or superset)
             if csb_set and csb_set.issubset(combo_set):
-                combo["description"] = csb.get("description", combo["description"])
-                combo["produces"] = csb.get("produces", [])
-                combo["prerequisites"] = csb.get("prerequisites", "")
-                combo["bracket"] = csb.get("bracketTag", "")
-                combo["mana_needed"] = csb.get("manaNeeded", "")
-                break
+                if best is None or len(csb_set) > len(set(_norm(c) for c in best.get("uses", []))):
+                    best = csb
+        if best:
+            combo["description"] = best.get("description", combo["description"])
+            combo["produces"] = best.get("produces", [])
+            combo["prerequisites"] = best.get("prerequisites", "")
+            combo["bracket"] = best.get("bracketTag", "")
+            combo["mana_needed"] = best.get("manaNeeded", "")
 
     # Batch-fetch Scryfall images for all combo cards
     card_images: Dict[str, str] = {}

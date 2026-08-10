@@ -166,13 +166,21 @@ const ComboCard: FC<{
         </span>
       </button>
 
-      {isOpen && (
+      <div className={`overflow-hidden transition-all duration-300 ease-in-out ${
+        isOpen ? 'max-h-[4000px] opacity-100' : 'max-h-0 opacity-0'
+      }`}>
         <div className="px-3 pb-3 space-y-4 text-sm border-t border-gray-700/50 pt-3">
           {/* CSB Description with mana symbols */}
           {combo.description && (
             <div className="glass rounded-lg p-3 border border-gray-700/50">
               <p className="text-gray-300 text-sm leading-relaxed whitespace-pre-line">
-                <ManaText text={combo.description} />
+                <ManaText text={
+                  (() => {
+                    const lines = combo.description.split('\n').filter(l => l.trim())
+                    if (lines.length <= 1) return combo.description
+                    return lines.map((l, i) => `${i + 1}. ${l}`).join('\n')
+                  })()
+                } />
               </p>
             </div>
           )}
@@ -283,7 +291,7 @@ const ComboCard: FC<{
             </a>
           )}
         </div>
-      )}
+      </div>
     </div>
   )
 }

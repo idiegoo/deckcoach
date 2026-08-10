@@ -129,7 +129,7 @@ const StaplesPanel: FC<StaplesPanelProps> = ({ suggestions }) => {
             <span className="text-xs text-gray-500">{currentCards.length} faltantes</span>
           </div>
 
-          <div className="flex flex-wrap gap-3 max-h-[420px] overflow-y-auto pr-1">
+          <div className="flex flex-wrap gap-3 max-h-[32rem] overflow-y-auto pr-1">
             {currentCards.length > 0 ? currentCards.map((card) => (
               <div key={card.name} className="flex flex-col items-center gap-1">
                 {card.image_url ? (
