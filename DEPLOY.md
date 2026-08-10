@@ -51,7 +51,7 @@ Ya está todo listo:
 
 ### 2.2 Deployar en Render
 
-1. Andá a https://dashboard.render.com → **New → Web Service**
+1. Anda a https://dashboard.render.com → **New → Web Service**
 2. Conectá tu repo de GitHub
 3. Configurá:
 
