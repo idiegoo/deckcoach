@@ -24,7 +24,7 @@ class CardDatabase:
     def _get_conn(self) -> sqlite3.Connection:
         if self._conn is None:
             os.makedirs(DB_DIR, exist_ok=True)
-            self._conn = sqlite3.connect(DB_FILE)
+            self._conn = sqlite3.connect(DB_FILE, check_same_thread=False)
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.execute("PRAGMA cache_size=-8000")  # 8MB cache

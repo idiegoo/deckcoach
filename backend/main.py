@@ -30,13 +30,14 @@ is_dev = os.getenv("DECKCOACH_ENV", "dev") == "dev"
 cors_origins = [
     "http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173",
 ]
+cors_regex = None
 if not is_dev:
-    cors_origins.append("https://*.vercel.app")
-    cors_origins.append("https://*.onrender.com")
+    cors_regex = r"https://.*\.vercel\.app|https://.*\.onrender\.com"
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
+    allow_origin_regex=cors_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
