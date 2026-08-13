@@ -1,4 +1,4 @@
-import { FC, useState } from 'react'
+import { FC, useState, Dispatch, SetStateAction } from 'react'
 import ManaText from './ManaText'
 import FlipCardImage from './FlipCardImage'
 import { useCardModal } from './CardModalContext'
@@ -28,6 +28,9 @@ const ComboPanel: FC<ComboPanelProps> = ({ combos }) => {
   const { open: openModal } = useCardModal()
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(5)
+  const [activeBrackets, setActiveBrackets] = useState<Set<string>>(new Set())
+  const [activeProduces, setActiveProduces] = useState<Set<string>>(new Set())
+  const [showProduces, setShowProduces] = useState(true)
 
   if (!combos || combos.length === 0) {
     return (
@@ -38,8 +41,46 @@ const ComboPanel: FC<ComboPanelProps> = ({ combos }) => {
   }
 
   const hasDesc = (c: ComboInfo) => c.description && c.description.length > 60 && c.produces?.length > 0
-  const complete = combos.filter(c => c.is_complete).sort((a, b) => (hasDesc(b) ? 1 : 0) - (hasDesc(a) ? 1 : 0))
-  const incomplete = combos.filter(c => !c.is_complete).sort((a, b) => (hasDesc(b) ? 1 : 0) - (hasDesc(a) ? 1 : 0))
+
+  // Collect unique bracket tags from combos, ordered 1 → 2 → 2-3 → 3 → 3-4 → 4 → banned → sin bracket
+  const BRACKET_ORDER = ['E', 'C', 'O', 'P', 'S', 'R', 'B', '']
+  const availableBrackets = [...new Set(combos.map(c => c.bracket || ''))].sort((a, b) => {
+    const ia = BRACKET_ORDER.indexOf(a)
+    const ib = BRACKET_ORDER.indexOf(b)
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
+  })
+
+  // Collect unique produces from combos that match the active bracket filter
+  const bracketFilteredCombos = activeBrackets.size === 0
+    ? combos
+    : combos.filter(c => activeBrackets.has(c.bracket || ''))
+  const availableProduces = [...new Set(bracketFilteredCombos.flatMap(c => c.produces || []))].sort()
+
+  const isFiltering = activeBrackets.size > 0 || activeProduces.size > 0
+  const matchesFilter = (c: ComboInfo) => {
+    const bracketOk = activeBrackets.size === 0 || activeBrackets.has(c.bracket || '')
+    const producesOk = activeProduces.size === 0 || (c.produces || []).some(p => activeProduces.has(p))
+    return bracketOk && producesOk
+  }
+
+  const toggleFilter = (setter: Dispatch<SetStateAction<Set<string>>>, value: string) => {
+    setter(prev => {
+      const next = new Set(prev)
+      if (next.has(value)) next.delete(value)
+      else next.add(value)
+      return next
+    })
+    setPage(0)
+  }
+
+  const clearFilters = () => {
+    setActiveBrackets(new Set())
+    setActiveProduces(new Set())
+    setPage(0)
+  }
+
+  const complete = combos.filter(c => c.is_complete && matchesFilter(c)).sort((a, b) => (hasDesc(b) ? 1 : 0) - (hasDesc(a) ? 1 : 0))
+  const incomplete = combos.filter(c => !c.is_complete && matchesFilter(c)).sort((a, b) => (hasDesc(b) ? 1 : 0) - (hasDesc(a) ? 1 : 0))
 
   return (
     <div className="space-y-4">
@@ -48,6 +89,126 @@ const ComboPanel: FC<ComboPanelProps> = ({ combos }) => {
         <h3 className="text-lg font-bold text-white">Combos detectados</h3>
         <span className="text-xs text-gray-500">(EDHREC + Commander Spellbook)</span>
       </div>
+
+      {/* Bracket filters */}
+      {availableBrackets.length > 0 && (
+        <div className="glass rounded-xl p-3">
+          <div className="flex items-center gap-2 flex-wrap min-w-0 mb-2">
+            <span className="text-xs text-gray-400">Filtrar por bracket:</span>
+            {activeBrackets.size > 0 ? (
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-indigo-600 text-white font-semibold">
+                {activeBrackets.size} activos
+              </span>
+            ) : (
+              <span className="text-[11px] text-gray-600">({availableBrackets.length})</span>
+            )}
+            {activeBrackets.size > 0 && (
+              <span
+                onClick={() => { setActiveBrackets(new Set()); setPage(0) }}
+                className="text-[10px] px-1.5 py-0.5 rounded-full border border-gray-600 text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors cursor-pointer"
+                title="Quitar filtros de bracket"
+              >
+                ✕ Quitar
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {availableBrackets.map(b => {
+              const info = BRACKET_MAP[b]
+              const isActive = activeBrackets.has(b)
+              const label = b === '' ? 'Sin bracket' : (info?.label || b)
+              return (
+                <button
+                  key={b}
+                  onClick={() => toggleFilter(setActiveBrackets, b)}
+                  className={`text-[11px] px-2 py-0.5 rounded-full border transition-all ${
+                    isActive
+                      ? 'bg-indigo-600 border-indigo-500 text-white font-semibold'
+                      : info
+                        ? `${info.cls} hover:opacity-80`
+                        : 'bg-gray-800/60 text-gray-400 border-gray-700/40 hover:bg-gray-800'
+                  }`}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Produces filters — collapsible accordion */}
+      {availableProduces.length > 0 && (
+        <div className="glass rounded-xl">
+          <button
+            onClick={() => setShowProduces(!showProduces)}
+            className="w-full p-3 flex items-center justify-between gap-2 hover:bg-white/5 transition-colors rounded-xl"
+          >
+            <div className="flex items-center gap-2 flex-wrap min-w-0">
+              <span className="text-xs text-gray-400">Combo tags:</span>
+              {activeProduces.size > 0 ? (
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-purple-600 text-white font-semibold">
+                  {activeProduces.size} activos
+                </span>
+              ) : (
+                <span className="text-[11px] text-gray-600">({availableProduces.length})</span>
+              )}
+              {activeProduces.size > 0 && (
+                <span
+                  onClick={(e) => { e.stopPropagation(); setActiveProduces(new Set()); setPage(0) }}
+                  className="text-[10px] px-1.5 py-0.5 rounded-full border border-gray-600 text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors cursor-pointer"
+                  title="Quitar filtros de combo tags"
+                >
+                  ✕ Quitar
+                </span>
+              )}
+            </div>
+            <span className={`text-sm text-gray-500 transition-transform shrink-0 ${showProduces ? 'rotate-180' : ''}`}>
+              &#9660;
+            </span>
+          </button>
+          <div className={`overflow-hidden transition-all duration-300 ease-in-out ${
+            showProduces ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0'
+          }`}>
+            <div className="px-3 pb-3 flex flex-wrap items-center gap-1.5">
+              {availableProduces.map(p => {
+                const isActive = activeProduces.has(p)
+                return (
+                  <button
+                    key={p}
+                    onClick={() => toggleFilter(setActiveProduces, p)}
+                    className={`text-[11px] px-2 py-0.5 rounded-full border transition-all ${
+                      isActive
+                        ? 'bg-purple-600 border-purple-500 text-white font-semibold'
+                        : 'bg-purple-500/15 text-purple-300 border-purple-500/20 hover:bg-purple-500/25'
+                    }`}
+                  >
+                    {p}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clear filters row */}
+      {isFiltering && (
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={clearFilters}
+            className="text-[11px] px-2 py-0.5 rounded-full border border-gray-600 text-gray-300 hover:bg-gray-800 transition-colors"
+          >
+            ✕ Quitar filtros
+          </button>
+          <button
+            onClick={clearFilters}
+            className="text-[11px] px-2 py-0.5 rounded-full border border-indigo-500/50 text-indigo-400 hover:bg-indigo-900/30 transition-colors"
+          >
+            Ver todos ({combos.length})
+          </button>
+        </div>
+      )}
 
       {complete.length > 0 && (
         <div className="mb-3">
@@ -122,6 +283,17 @@ const ComboPanel: FC<ComboPanelProps> = ({ combos }) => {
   )
 }
 
+// CSB bracket short codes → WotC bracket numbers (from Commander Spellbook syntax guide)
+const BRACKET_MAP: Record<string, { label: string; cls: string }> = {
+  'R': { label: 'Bracket 4+', cls: 'bg-red-500/20 text-red-400 border-red-500/40' },
+  'S': { label: 'Bracket 3-4', cls: 'bg-orange-500/20 text-orange-400 border-orange-500/40' },
+  'P': { label: 'Bracket 3', cls: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40' },
+  'O': { label: 'Bracket 2-3', cls: 'bg-lime-500/20 text-lime-400 border-lime-500/40' },
+  'C': { label: 'Bracket 2', cls: 'bg-green-500/20 text-green-400 border-green-500/40' },
+  'E': { label: 'Bracket 1', cls: 'bg-blue-500/20 text-blue-400 border-blue-500/40' },
+  'B': { label: 'Baneado', cls: 'bg-red-900/40 text-red-500 border-red-700/40' },
+}
+
 const ComboCard: FC<{
   combo: ComboInfo
   expanded: string | null
@@ -131,6 +303,7 @@ const ComboCard: FC<{
   const hasCsbDesc = combo.description && combo.description.length > 60 && combo.produces?.length > 0
   const allCards = [...combo.cards_in_deck, ...combo.missing_pieces]
   const { open: openModal } = useCardModal()
+  const bracket = BRACKET_MAP[combo.bracket]
 
   return (
     <div className="glass border border-gray-700 rounded-lg mb-2 overflow-hidden">
@@ -153,11 +326,16 @@ const ComboCard: FC<{
             )}
             {combo.is_complete && (
               <span className="text-xs bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded font-bold">
-                &#10003; Completo
+                &#10003; Listo
               </span>
             )}
             {hasCsbDesc && (
               <span className="text-xs text-indigo-400">(Explicación disponible)</span>
+            )}
+            {bracket && (
+              <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${bracket.cls}`}>
+                {bracket.label}
+              </span>
             )}
           </div>
         </div>
@@ -196,19 +374,14 @@ const ComboCard: FC<{
             </div>
           )}
 
-          {/* Meta: bracket + mana */}
-          <div className="flex items-center gap-3 flex-wrap text-xs">
-            {combo.bracket && (
-              <span className="text-gray-400">
-                Bracket: <span className="text-gray-200 font-medium">{combo.bracket}</span>
-              </span>
-            )}
-            {combo.mana_needed && (
+          {/* Meta: mana */}
+          {combo.mana_needed && (
+            <div className="flex items-center gap-3 flex-wrap text-xs">
               <span className="text-gray-400">
                 Maná: <ManaText text={combo.mana_needed} />
               </span>
-            )}
-          </div>
+            </div>
+          )}
 
           {/* Prerequisites */}
           {combo.prerequisites && (
