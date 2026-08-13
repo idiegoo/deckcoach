@@ -374,7 +374,8 @@ def _extract_card_score(cv: dict) -> float:
 
 def get_all_cardlists(commander_name: str) -> Dict[str, list]:
     """
-    Fetch ALL cardlists from EDHREC for a commander using pyedhrec.
+    Fetch ALL cardlists from EDHREC for a commander.
+    Uses the stable json.edhrec.com API (pyedhrec's NextJS buildId breaks).
     Returns {section_name: [{name, score}, ...]}
     Uses disk cache (24h TTL).
     """
@@ -384,12 +385,35 @@ def get_all_cardlists(commander_name: str) -> Dict[str, list]:
     if cached:
         return cached
 
+    raw = None
+
+    # Primary: stable json.edhrec.com API
     try:
-        edh = _get_pyedhrec()
-        raw = edh.get_commander_cards(commander_name)
+        url = f"https://json.edhrec.com/pages/commanders/{slug}.json"
+        resp = requests.get(url, timeout=15, headers={
+            "User-Agent": "DeckCoach/1.0 (https://github.com/deckcoach; deckcoach@example.com)"
+        })
+        if resp.status_code == 200:
+            data = resp.json()
+            container = data.get("container", {})
+            json_dict = container.get("json_dict", {})
+            cardlists = json_dict.get("cardlists", [])
+            raw = {}
+            for cl in cardlists:
+                header = cl.get("header", "")
+                cardviews = cl.get("cardviews", [])
+                raw[str(header)] = cardviews
     except Exception as e:
-        print(f"[pyedhrec] Error fetching cardlists for {commander_name}: {e}")
-        return {}
+        print(f"[EDHREC] Stable API error: {e}")
+
+    # Fallback: pyedhrec (NextJS API)
+    if not raw:
+        try:
+            edh = _get_pyedhrec()
+            raw = edh.get_commander_cards(commander_name)
+        except Exception as e:
+            print(f"[pyedhrec] Error fetching cardlists for {commander_name}: {e}")
+            return {}
 
     if not raw:
         return {}
